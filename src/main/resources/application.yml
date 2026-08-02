@@ -1,0 +1,32 @@
+spring:
+  application:
+    name: chexuan-dzpk
+
+  jackson:
+    time-zone: GMT+8
+    date-format: yyyy-MM-dd HH:mm:ss
+    default-property-inclusion: non_null
+
+server:
+  port: 9100
+
+# ========================================
+# 德州子游戏服务配置
+# ========================================
+dzpk:
+  # 与主服(chexuan-springboot JwtUtil)相同的 JWT 密钥,本地验签,不回主服校验
+  jwt-secret: "ChexuanGame2025SecretKeyForJWT123456"
+  # 开发模式:允许无 token 的游客登录(guest:昵称),联调用;上线关掉
+  allow-guest: true
+  # 玩家行动思考时间(秒),老德州 room.xml opTime 默认 15,+3 秒网络余量在前端做
+  action-timeout-secs: 15
+  # 一手结束到下一手开始的间隔(秒)
+  next-hand-delay-secs: 4
+  # 周期结算/打光后,补带入等待时长(秒),超时自动站起
+  await-buyin-secs: 30
+  # 游客初始金币(内存钱包,接主服 internal wallet 前的桩)
+  guest-init-balance: 1000000
+
+logging:
+  level:
+    com.chexuan.dzpk: debug
