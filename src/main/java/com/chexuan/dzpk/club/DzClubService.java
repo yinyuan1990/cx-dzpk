@@ -39,6 +39,8 @@ public class DzClubService {
     private final JdbcTemplate jdbc;
     private final DiamondService diamondService;
     private final WalletService walletService;
+    /** 系统参数中心(可为 null,退回 @Value 默认) */
+    private final com.chexuan.dzpk.config.DzConfigService cfg;
 
     /** 创建俱乐部扣钻石(公用钻石,主库 user.diamond);0=不扣。扯旋普通俱乐部 200 钻 */
     @Value("${dzpk.create-club-diamond-cost:0}")
@@ -48,10 +50,26 @@ public class DzClubService {
     @Value("${dzpk.max-club-per-user:10}")
     private int maxClubPerUser;
 
-    public DzClubService(JdbcTemplate jdbc, DiamondService diamondService, WalletService walletService) {
+    @org.springframework.beans.factory.annotation.Autowired
+    public DzClubService(JdbcTemplate jdbc, DiamondService diamondService, WalletService walletService,
+                         com.chexuan.dzpk.config.DzConfigService cfg) {
         this.jdbc = jdbc;
         this.diamondService = diamondService;
         this.walletService = walletService;
+        this.cfg = cfg;
+    }
+
+    /** 单测用 */
+    public DzClubService(JdbcTemplate jdbc, DiamondService diamondService, WalletService walletService) {
+        this(jdbc, diamondService, walletService, null);
+    }
+
+    private long clubDiamondCost() {
+        return cfg != null ? cfg.getLong("create_club_diamond_cost", createClubDiamondCost) : createClubDiamondCost;
+    }
+
+    private int clubLimit() {
+        return cfg != null ? cfg.getInt("max_club_per_user", maxClubPerUser) : maxClubPerUser;
     }
 
     private void requireDb() {
@@ -73,14 +91,15 @@ public class DzClubService {
         if (name.length() > 16) throw new ClubException("俱乐部名称过长");
         Integer cnt = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM dz_club WHERE creator_user_id = ? AND state <> 2", Integer.class, userId);
-        if (cnt != null && cnt >= maxClubPerUser) throw new ClubException("最多创建 " + maxClubPerUser + " 个俱乐部");
+        if (cnt != null && cnt >= clubLimit()) throw new ClubException("最多创建 " + clubLimit() + " 个俱乐部");
 
         long cost = 0;
-        if (createClubDiamondCost > 0 && diamondService.hasMainAccount(userId)) {
-            if (!diamondService.debit(userId, createClubDiamondCost, "create_club", "德州创建俱乐部")) {
-                throw new ClubException("钻石不足,创建俱乐部需要 " + createClubDiamondCost + " 钻石");
+        long needDiamond = clubDiamondCost();
+        if (needDiamond > 0 && diamondService.hasMainAccount(userId)) {
+            if (!diamondService.debit(userId, needDiamond, "create_club", "德州创建俱乐部")) {
+                throw new ClubException("钻石不足,创建俱乐部需要 " + needDiamond + " 钻石");
             }
-            cost = createClubDiamondCost;
+            cost = needDiamond;
         }
 
         long clubNo = uniqueNo("SELECT COUNT(*) FROM dz_club WHERE club_no = ? AND state <> 2");
@@ -200,7 +219,197 @@ public class DzClubService {
         m.put("level", rs.getInt("level"));
         m.put("inviteCode", rs.getLong("invite_code"));
         m.put("partnerRate", rs.getInt("partner_rate"));
+        m.put("score", rs.getLong("score"));
         return m;
+    }
+
+    // ================================================================
+    // 俱乐部积分(对齐扯旋 v3.18:每俱乐部独立一本账,带入货币就是它)
+    //   积分流向只有三条路:
+    //   1. 增发/核销 — 只有群主,凭空给自己造分/销分(type 14/21)
+    //   2. 上/下分   — 群主·管理员 ↔ 成员,转移操作者自己的分(16/10、17/11)
+    //   3. 赠送      — 任何成员 → 同俱乐部成员,扣自己的分(12/13)
+    //   游戏侧(type 对齐扯旋 game_score_log):带入1 / 起立返还2 / 提取红利15 / 逃跑惩罚19·20
+    // ================================================================
+
+    /** 积分流水类型名(对齐扯旋 GameScoreLogService.typeName) */
+    public static String scoreTypeName(int type) {
+        return switch (type) {
+            case 1 -> "坐下带入";
+            case 2 -> "起立返还";
+            case 3 -> "每局结算";
+            case 4 -> "系统调整";
+            case 5 -> "其他";
+            case 10, 16 -> "玩家上分";
+            case 11, 17 -> "玩家下分";
+            case 12, 13 -> "赠送积分";
+            case 14 -> "增发积分";
+            case 15 -> "提取红利";
+            case 18 -> "礼物赠送";
+            case 19, 20 -> "逃跑惩罚";
+            case 21 -> "核销积分";
+            default -> "未知";
+        };
+    }
+
+    /** 俱乐部内积分余额(非成员返回 0) */
+    public long score(long clubId, long userId) {
+        if (jdbc == null) return 0;
+        try {
+            Long v = jdbc.queryForObject(
+                    "SELECT score FROM dz_club_member WHERE club_id = ? AND user_id = ? AND status = 1",
+                    Long.class, clubId, userId);
+            return v != null ? v : 0;
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
+    /** 原子加/扣分(扣分余额不足抛 ClubException),返回变动后余额 */
+    private long changeScore(long clubId, long userId, long delta, int type, long otherUserId, String remark) {
+        requireDb();
+        int n;
+        if (delta < 0) {
+            n = jdbc.update("UPDATE dz_club_member SET score = score + ? " +
+                            "WHERE club_id = ? AND user_id = ? AND status = 1 AND score >= ?",
+                    delta, clubId, userId, -delta);
+            if (n <= 0) throw new ClubException("俱乐部积分不足");
+        } else {
+            n = jdbc.update("UPDATE dz_club_member SET score = score + ? " +
+                            "WHERE club_id = ? AND user_id = ? AND status = 1",
+                    delta, clubId, userId);
+            if (n <= 0) throw new ClubException("不是俱乐部成员");
+        }
+        long after = score(clubId, userId);
+        try {
+            jdbc.update("INSERT INTO dz_score_log (club_id, user_id, other_user_id, type, amount, " +
+                            "before_score, after_score, remark, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                    clubId, userId, otherUserId, type, delta, after - delta, after,
+                    remark == null ? "" : remark, now());
+        } catch (Exception e) {
+            log.error("积分流水写入失败: clubId={}, userId={}", clubId, userId, e);
+        }
+        return after;
+    }
+
+    /** 群主增发(全系统唯一"印钞机",凭空给自己造分,type=14) */
+    public Map<String, Object> ownerAddScore(long clubId, long operatorId, long amount) {
+        requireDb();
+        if (amount <= 0) throw new ClubException("金额必须大于 0");
+        if (!isOwner(clubId, operatorId)) throw new ClubException("只有群主可以增发积分");
+        long after = changeScore(clubId, operatorId, amount, 14, 0, "群主增发");
+        return Map.of("op", "ownerAdd", "amount", amount, "score", after);
+    }
+
+    /** 群主核销(销毁自己账上的分,type=21) */
+    public Map<String, Object> ownerBurnScore(long clubId, long operatorId, long amount) {
+        requireDb();
+        if (amount <= 0) throw new ClubException("金额必须大于 0");
+        if (!isOwner(clubId, operatorId)) throw new ClubException("只有群主可以核销积分");
+        long after = changeScore(clubId, operatorId, -amount, 21, 0, "群主核销");
+        return Map.of("op", "ownerBurn", "amount", amount, "score", after);
+    }
+
+    /** 上分:群主/管理员把自己的分转给成员(操作者16-,成员10+) */
+    public Map<String, Object> distributeScore(long clubId, long operatorId, long targetUserId, long amount) {
+        requireDb();
+        if (amount <= 0) throw new ClubException("金额必须大于 0");
+        Map<String, Object> op = member(clubId, operatorId);
+        if (op == null || ((int) op.get("role") != ROLE_OWNER && (int) op.get("role") != ROLE_ADMIN)) {
+            throw new ClubException("只有群主/管理员可以上分");
+        }
+        if (member(clubId, targetUserId) == null) throw new ClubException("对方不是俱乐部成员");
+        changeScore(clubId, operatorId, -amount, 16, targetUserId, "上分给 " + targetUserId);
+        long after = changeScore(clubId, targetUserId, amount, 10, operatorId, "群主/管理员上分");
+        return Map.of("op", "distribute", "userId", targetUserId, "amount", amount, "targetScore", after,
+                "myScore", score(clubId, operatorId));
+    }
+
+    /** 下分:群主/管理员收回成员的分(成员11-,操作者17+) */
+    public Map<String, Object> collectScore(long clubId, long operatorId, long targetUserId, long amount) {
+        requireDb();
+        if (amount <= 0) throw new ClubException("金额必须大于 0");
+        Map<String, Object> op = member(clubId, operatorId);
+        if (op == null || ((int) op.get("role") != ROLE_OWNER && (int) op.get("role") != ROLE_ADMIN)) {
+            throw new ClubException("只有群主/管理员可以下分");
+        }
+        changeScore(clubId, targetUserId, -amount, 11, operatorId, "群主/管理员下分");
+        long after = changeScore(clubId, operatorId, amount, 17, targetUserId, "从 " + targetUserId + " 下分");
+        return Map.of("op", "collect", "userId", targetUserId, "amount", amount,
+                "targetScore", score(clubId, targetUserId), "myScore", after);
+    }
+
+    /** 赠送:任何成员把自己的分送给同俱乐部成员(转出12-,转入13+) */
+    public Map<String, Object> transferScore(long clubId, long operatorId, long targetUserId, long amount) {
+        requireDb();
+        if (amount <= 0) throw new ClubException("金额必须大于 0");
+        if (operatorId == targetUserId) throw new ClubException("不能赠送给自己");
+        if (member(clubId, operatorId) == null) throw new ClubException("不是俱乐部成员");
+        if (member(clubId, targetUserId) == null) throw new ClubException("对方不是俱乐部成员");
+        changeScore(clubId, operatorId, -amount, 12, targetUserId, "赠送给 " + targetUserId);
+        changeScore(clubId, targetUserId, amount, 13, operatorId, "来自 " + operatorId + " 的赠送");
+        return Map.of("op", "transfer", "userId", targetUserId, "amount", amount,
+                "myScore", score(clubId, operatorId));
+    }
+
+    /** 积分流水(自己的;群主/管理员可查任何人) */
+    public List<Map<String, Object>> scoreLogs(long clubId, long operatorId, long targetUserId, int limit) {
+        requireDb();
+        long queryUser = targetUserId > 0 ? targetUserId : operatorId;
+        if (queryUser != operatorId) {
+            Map<String, Object> op = member(clubId, operatorId);
+            if (op == null || ((int) op.get("role") != ROLE_OWNER && (int) op.get("role") != ROLE_ADMIN)) {
+                throw new ClubException("无权查看他人流水");
+            }
+        }
+        return jdbc.query("SELECT type, amount, before_score, after_score, other_user_id, remark, created_at " +
+                        "FROM dz_score_log WHERE club_id = ? AND user_id = ? ORDER BY id DESC LIMIT " +
+                        Math.min(Math.max(limit, 1), 100),
+                (rs, i) -> {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    int type = rs.getInt("type");
+                    m.put("type", type);
+                    m.put("typeName", scoreTypeName(type));
+                    m.put("amount", rs.getLong("amount"));
+                    m.put("before", rs.getLong("before_score"));
+                    m.put("after", rs.getLong("after_score"));
+                    m.put("otherUserId", rs.getLong("other_user_id"));
+                    m.put("remark", rs.getString("remark"));
+                    m.put("time", rs.getTimestamp("created_at").getTime());
+                    return m;
+                }, clubId, queryUser);
+    }
+
+    // ---- 游戏侧(引擎调用,失败不抛只返回 false / 打日志) ----
+
+    /** 带入扣分(type=1 坐下带入),积分不足返回 false */
+    public boolean debitScoreForGame(long clubId, long userId, long amount, long roomId) {
+        try {
+            changeScore(clubId, userId, -amount, 1, roomId, "牌局带入 room=" + roomId);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /** 游戏回分:起立返还2 / 提取红利15 / 逃跑惩罚(群主收)20 */
+    public void creditScoreForGame(long clubId, long userId, long amount, int type, String remark) {
+        if (amount <= 0) return;
+        try {
+            changeScore(clubId, userId, amount, type, 0, remark);
+        } catch (Exception e) {
+            log.error("游戏回分失败: clubId={}, userId={}, amount={}, type={}", clubId, userId, amount, type, e);
+        }
+    }
+
+    /** 罚金扣分(type=19 逃跑惩罚,玩家侧;退筹已入账后再扣,余额必够) */
+    public void fineScoreForGame(long clubId, long userId, long fine, long roomId) {
+        if (fine <= 0) return;
+        try {
+            changeScore(clubId, userId, -fine, 19, roomId, "离桌罚金 room=" + roomId);
+        } catch (Exception e) {
+            log.error("罚金扣分失败: clubId={}, userId={}, fine={}", clubId, userId, fine, e);
+        }
     }
 
     // ================================================================
@@ -440,6 +649,17 @@ public class DzClubService {
         return owner != null && owner == userId;
     }
 
+    /** 群主 userId(查不到返回 0) — 周期扣钻/罚金归属用 */
+    public long ownerUserId(long clubId) {
+        if (jdbc == null || clubId <= 0) return 0;
+        try {
+            Long owner = ownerOf(clubId);
+            return owner != null ? owner : 0;
+        } catch (Exception e) {
+            return 0;
+        }
+    }
+
     /**
      * 抽水分成:沿被抽玩家的 parent 链上溯到群主,反转为「群主→…→玩家」,
      * 只有群主(3)/合伙人(4)参与;每级把「剩余 × 下游 partnerRate%」让给下一个有资格的下游,
@@ -506,7 +726,8 @@ public class DzClubService {
 
     private void credit(long clubId, long roomId, long fromUserId, long toUserId, String toRole,
                         long totalProfit, long commission, long share, int rate) {
-        walletService.credit(toUserId, share);
+        // 分成进各自的俱乐部积分(type=15 提取红利,对齐扯旋)
+        creditScoreForGame(clubId, toUserId, share, 15, "抽水分成 room=" + roomId);
         jdbc.update("INSERT INTO dz_commission_log (club_id, room_id, from_user_id, to_user_id, to_role, " +
                         "total_profit, commission, share_amount, share_rate, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
                 clubId, roomId, fromUserId, toUserId, toRole, totalProfit, commission, share, rate, now());

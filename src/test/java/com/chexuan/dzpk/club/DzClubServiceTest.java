@@ -197,15 +197,15 @@ class DzClubServiceTest {
     }
 
     @Test
-    void 分成_沿链多层让利() {
+    void 分成_沿链多层让利_进俱乐部积分() {
         long clubId = buildClub();
-        long o0 = wallet.balance(OWNER), a0 = wallet.balance(PARTNER_A), b0 = wallet.balance(PARTNER_B);
+        long o0 = clubs.score(clubId, OWNER), a0 = clubs.score(clubId, PARTNER_A), b0 = clubs.score(clubId, PARTNER_B);
         // MEMBER 被抽 1000:链 群主→A(30%)→B(50%)
         // 群主留 1000-300=700;A 留 300-150=150;B 末端拿 150
         clubs.distributeRake(clubId, 888888, MEMBER, 20000, 1000);
-        assertEquals(700, wallet.balance(OWNER) - o0);
-        assertEquals(150, wallet.balance(PARTNER_A) - a0);
-        assertEquals(150, wallet.balance(PARTNER_B) - b0);
+        assertEquals(700, clubs.score(clubId, OWNER) - o0);
+        assertEquals(150, clubs.score(clubId, PARTNER_A) - a0);
+        assertEquals(150, clubs.score(clubId, PARTNER_B) - b0);
         Integer logs = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM dz_commission_log WHERE club_id=? AND from_user_id=?",
                 Integer.class, clubId, MEMBER);
@@ -219,9 +219,66 @@ class DzClubServiceTest {
     void 分成_普通成员在链上不参与() {
         long clubId = buildClub();
         // ADMIN 直接挂群主且不是合伙人 → ADMIN 被抽时全归群主
-        long o0 = wallet.balance(OWNER);
+        long o0 = clubs.score(clubId, OWNER);
         clubs.distributeRake(clubId, 888888, ADMIN, 5000, 500);
-        assertEquals(500, wallet.balance(OWNER) - o0);
+        assertEquals(500, clubs.score(clubId, OWNER) - o0);
+    }
+
+    // ================================================================
+    // 俱乐部积分(每俱乐部独立一本账)
+    // ================================================================
+
+    @Test
+    void 积分_群主增发核销_只有群主能用() {
+        long clubId = buildClub();
+        clubs.ownerAddScore(clubId, OWNER, 100000);
+        assertEquals(100000, clubs.score(clubId, OWNER));
+        assertThrows(DzClubService.ClubException.class, () -> clubs.ownerAddScore(clubId, ADMIN, 1000),
+                "管理员不能增发");
+        clubs.ownerBurnScore(clubId, OWNER, 30000);
+        assertEquals(70000, clubs.score(clubId, OWNER));
+        assertThrows(DzClubService.ClubException.class, () -> clubs.ownerBurnScore(clubId, OWNER, 999999),
+                "核销超余额拒绝");
+    }
+
+    @Test
+    void 积分_上分下分_转移操作者自己的分() {
+        long clubId = buildClub();
+        clubs.ownerAddScore(clubId, OWNER, 50000);
+        // 上分:群主 → 成员(扣群主自己的)
+        clubs.distributeScore(clubId, OWNER, MEMBER, 20000);
+        assertEquals(30000, clubs.score(clubId, OWNER));
+        assertEquals(20000, clubs.score(clubId, MEMBER));
+        // 管理员没分,上分失败
+        assertThrows(DzClubService.ClubException.class,
+                () -> clubs.distributeScore(clubId, ADMIN, MEMBER, 1000), "管理员余额不足");
+        // 成员不能上分
+        assertThrows(DzClubService.ClubException.class,
+                () -> clubs.distributeScore(clubId, MEMBER, PARTNER_A, 1000));
+        // 下分:收回成员的分
+        clubs.collectScore(clubId, OWNER, MEMBER, 5000);
+        assertEquals(35000, clubs.score(clubId, OWNER));
+        assertEquals(15000, clubs.score(clubId, MEMBER));
+    }
+
+    @Test
+    void 积分_成员赠送_游戏带入退筹() {
+        long clubId = buildClub();
+        clubs.ownerAddScore(clubId, OWNER, 50000);
+        clubs.distributeScore(clubId, OWNER, MEMBER, 20000);
+        // 赠送:成员 → 合伙人B
+        clubs.transferScore(clubId, MEMBER, PARTNER_B, 3000);
+        assertEquals(17000, clubs.score(clubId, MEMBER));
+        assertEquals(3000, clubs.score(clubId, PARTNER_B));
+        // 游戏带入(type=1)与起立返还(type=2)
+        assertTrue(clubs.debitScoreForGame(clubId, MEMBER, 10000, 777));
+        assertEquals(7000, clubs.score(clubId, MEMBER));
+        assertFalse(clubs.debitScoreForGame(clubId, MEMBER, 99999, 777), "积分不足带入失败");
+        clubs.creditScoreForGame(clubId, MEMBER, 12000, 2, "起立返还");
+        assertEquals(19000, clubs.score(clubId, MEMBER));
+        // 流水可查
+        List<Map<String, Object>> logs = clubs.scoreLogs(clubId, MEMBER, 0, 50);
+        assertFalse(logs.isEmpty());
     }
 
     @Test

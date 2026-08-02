@@ -56,10 +56,30 @@ public class DzPlayer {
     private boolean pendingStandUp;
     /** 局间生效:追加带入 */
     private long pendingBuyin;
-    /** 暂离(不参与发牌) */
+    /** 暂离/放假中(不参与发牌,对齐扯旋 ON_LEAVE) */
     private boolean sittingOut;
     /** 断线(超时自动弃牌沿用,不踢人) */
     private boolean offline;
+
+    // ==================== 留座暂离/放假(对齐扯旋 seatReserve) ====================
+
+    /** 放假到期时间戳(0=未在放假) */
+    private long seatReserveDeadline;
+    /** 本结算周期是否已用过一次暂离(周期结算清零) */
+    private boolean seatReserveUsed;
+    /** 牌局中未弃牌申请暂离 → 弃牌/局末再进放假 */
+    private boolean manualLeavePending;
+    /** 断线待处理:代弃后自动进放假(对齐扯旋 vacationPending) */
+    private boolean vacationPending;
+    /** 放假超时任务 */
+    private transient java.util.concurrent.ScheduledFuture<?> graceTimer;
+
+    // ==================== 离座时间累计(逃跑罚金用) ====================
+
+    /** 本次断线开始时刻(0=在线) */
+    private long offlineSince;
+    /** 本周期累计离线时长(ms) */
+    private long leaveAccumMs;
 
     // ==================== 周期结算(循环玩法,对齐扯旋 v46/v52.9r) ====================
 
@@ -110,7 +130,14 @@ public class DzPlayer {
         winCount = 0;
         loseCount = 0;
         vpipCount = 0;
+        seatReserveUsed = false;  // 对齐扯旋:周期结算后暂离次数重置
+        leaveAccumMs = 0;
         settlePeriodSeq++;
+    }
+
+    /** 是否放假中(在座但暂离) */
+    public boolean inGrace() {
+        return sittingOut && seatReserveDeadline > 0;
     }
 
     /** 开始新一手前重置 */

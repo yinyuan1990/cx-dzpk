@@ -29,14 +29,28 @@ public class WalletService {
     @Value("${dzpk.guest-init-balance:1000000}")
     private long initBalance;
 
+    /** 系统参数中心(可为 null,退回 @Value 默认) */
+    private final com.chexuan.dzpk.config.DzConfigService cfg;
+
     @Autowired
+    public WalletService(JdbcTemplate jdbc, com.chexuan.dzpk.config.DzConfigService cfg) {
+        this.jdbc = jdbc;
+        this.cfg = cfg;
+    }
+
+    /** 单测用 */
     public WalletService(JdbcTemplate jdbc) {
         this.jdbc = jdbc;
+        this.cfg = null;
     }
 
     /** 单测用:纯内存 */
     public WalletService() {
-        this(null);
+        this((JdbcTemplate) null);
+    }
+
+    private long initBalance() {
+        return cfg != null ? cfg.getLong("guest_init_balance", initBalance) : initBalance;
     }
 
     public long balance(long userId) {
@@ -83,8 +97,8 @@ public class WalletService {
                     rs -> rs.next() ? 1 : null, userId);
             if (exists == null) {
                 jdbc.update("INSERT INTO dz_user_wallet (user_id, balance, updated_at) VALUES (?,?,?)",
-                        userId, initBalance, now());
-                log.info("钱包开户: userId={}, init={}", userId, initBalance);
+                        userId, initBalance(), now());
+                log.info("钱包开户: userId={}, init={}", userId, initBalance());
             }
         } catch (Exception e) {
             // 并发下主键冲突可忽略

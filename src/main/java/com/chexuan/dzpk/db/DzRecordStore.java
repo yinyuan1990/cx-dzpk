@@ -167,6 +167,37 @@ public class DzRecordStore {
         }
     }
 
+    /** 本房间最近结算记录(实时战绩历史区,对齐扯旋同 session 最近 50 条) */
+    public List<Map<String, Object>> roomRecords(long roomId, int limit) {
+        if (jdbc == null) return List.of();
+        try {
+            return jdbc.query("SELECT user_id, nickname, period_seq, bring_in, final_stack, profit, rake, " +
+                            "refund, hand_count, win_count, lose_count, played_secs, reason, created_at " +
+                            "FROM dz_settle_record WHERE room_id = ? ORDER BY id DESC LIMIT " + Math.min(limit, 100),
+                    (rs, i) -> {
+                        Map<String, Object> m = new LinkedHashMap<>();
+                        m.put("userId", rs.getLong("user_id"));
+                        m.put("nickname", rs.getString("nickname"));
+                        m.put("periodSeq", rs.getInt("period_seq"));
+                        m.put("bringIn", rs.getLong("bring_in"));
+                        m.put("finalStack", rs.getLong("final_stack"));
+                        m.put("profit", rs.getLong("profit"));
+                        m.put("rake", rs.getLong("rake"));
+                        m.put("refund", rs.getLong("refund"));
+                        m.put("handCount", rs.getInt("hand_count"));
+                        m.put("winCount", rs.getInt("win_count"));
+                        m.put("loseCount", rs.getInt("lose_count"));
+                        m.put("playedSecs", rs.getLong("played_secs"));
+                        m.put("reason", rs.getString("reason"));
+                        m.put("time", rs.getTimestamp("created_at").getTime());
+                        return m;
+                    }, roomId);
+        } catch (Exception e) {
+            log.error("房间战绩查询失败: roomId={}", roomId, e);
+            return List.of();
+        }
+    }
+
     /** 我的累计战绩:总场次/总盈亏/总手数/胜负 */
     public Map<String, Object> myStats(long userId) {
         if (jdbc == null) return Map.of();

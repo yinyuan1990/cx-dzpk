@@ -92,6 +92,19 @@ public class DzRoom {
      */
     private final List<PotManager.Contribution> deadContributions = new ArrayList<>();
 
+    /**
+     * 物理锁座(对齐扯旋281):放假超时站起后座位保留给本人一段时间。
+     * seat → [userId, deadlineMs],懒过期。
+     */
+    private final Map<Integer, long[]> seatLocks = new ConcurrentHashMap<>();
+
+    // ==================== 圈主周期扣钻(对齐扯旋 v46) ====================
+
+    /** 下次群主周期服务费到期时间戳(0=本周期还没预付) */
+    private long ownerDiamondDueAt;
+    /** 群主钻石扣不动 → 不再开新局(等充值) */
+    private boolean diamondBlocked;
+
     /** 行动超时任务(换人行动时取消重排) */
     private ScheduledFuture<?> actionTimeout;
     /** 行动超时截止时间戳(快照给前端画倒计时) */
@@ -157,5 +170,21 @@ public class DzRoom {
     /** 游戏是否进行中(一手牌没打完) */
     public boolean inGame() {
         return stage != GameStage.WAITING && stage != GameStage.FINISHED;
+    }
+
+    /** 锁座(物理保留给 userId) */
+    public void lockSeat(int seat, long userId, long durationMs) {
+        seatLocks.put(seat, new long[]{userId, System.currentTimeMillis() + durationMs});
+    }
+
+    /** 座位被谁锁着(过期自动清);未锁返回 0 */
+    public long seatLockedBy(int seat) {
+        long[] lock = seatLocks.get(seat);
+        if (lock == null) return 0;
+        if (lock[1] <= System.currentTimeMillis()) {
+            seatLocks.remove(seat);
+            return 0;
+        }
+        return lock[0];
     }
 }

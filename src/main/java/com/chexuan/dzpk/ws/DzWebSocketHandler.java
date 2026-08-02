@@ -47,6 +47,7 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
     private final DiamondService diamondService;
     private final DzRecordStore records;
     private final DzClubService clubService;
+    private final com.chexuan.dzpk.config.DzConfigService cfg;
 
     @Value("${dzpk.allow-guest:false}")
     private boolean allowGuest;
@@ -59,7 +60,7 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
                               WsSessionRegistry registry, DzGameService gameService,
                               DzRoomManager roomManager, WalletService walletService,
                               DiamondService diamondService, DzRecordStore records,
-                              DzClubService clubService) {
+                              DzClubService clubService, com.chexuan.dzpk.config.DzConfigService cfg) {
         this.objectMapper = objectMapper;
         this.jwtVerifier = jwtVerifier;
         this.registry = registry;
@@ -69,6 +70,7 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
         this.diamondService = diamondService;
         this.records = records;
         this.clubService = clubService;
+        this.cfg = cfg;
     }
 
     @Override
@@ -118,7 +120,7 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
             }
             nickname = str(data, "nickname");
             if (nickname == null) nickname = "玩家" + userId;
-        } else if (allowGuest && str(data, "guest") != null) {
+        } else if (cfg.getBool("allow_guest", allowGuest) && str(data, "guest") != null) {
             userId = guestIdGen.getAndIncrement();
             nickname = str(data, "guest");
         } else {
@@ -177,6 +179,11 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
                 send(session, res);
             }
             case MsgType.CREATE_ROOM -> {
+                // 停服维护(对齐扯旋总后台开关):禁止建房,不影响已在玩的
+                if (cfg.getBool("maintenance_mode", false)) {
+                    send(session, err(msg, "服务器维护更新中,暂时无法创建牌局,请稍后再来"));
+                    return;
+                }
                 // 全量参数解析+校验在 RoomRules(对齐老德州建房参数)
                 com.chexuan.dzpk.game.rules.RoomRules rules;
                 try {
@@ -192,12 +199,13 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
                 }
                 // 建房扣钻石(公用货币,主库 user.diamond;游客/机器人无主服账号跳过)
                 long cost = 0;
-                if (createRoomDiamondCost > 0 && diamondService.hasMainAccount(userId)) {
-                    if (!diamondService.debit(userId, createRoomDiamondCost, "create_room", "德州建房")) {
-                        send(session, err(msg, "钻石不足,创建房间需要 " + createRoomDiamondCost + " 钻石"));
+                long createCost = cfg.getLong("create_room_diamond_cost", createRoomDiamondCost);
+                if (createCost > 0 && diamondService.hasMainAccount(userId)) {
+                    if (!diamondService.debit(userId, createCost, "create_room", "德州建房")) {
+                        send(session, err(msg, "钻石不足,创建房间需要 " + createCost + " 钻石"));
                         return;
                     }
-                    cost = createRoomDiamondCost;
+                    cost = createCost;
                 }
                 DzRoom room = roomManager.create(rules, userId);
                 records.saveRoomCreated(room, cost);
@@ -214,21 +222,26 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
                         rules.getSettleTimeMins(), rules.getRakePercent(),
                         rules.getAnte(), rules.isStraddleOn(), rules.isInsuranceOn(), rules.isMuckOn(), cost);
             }
-            case MsgType.ENTER_ROOM -> {
-                DzRoom r = roomManager.get(roomId);
-                if (r != null && r.getClubId() > 0 && !clubService.isMember(r.getClubId(), userId)) {
-                    send(session, err(msg, "俱乐部牌局,仅成员可进"));
+            // 观战不校验成员(对齐扯旋:任何人可进房观战,坐下才查成员)
+            case MsgType.ENTER_ROOM -> gameService.enterRoom(roomId, userId, nickname);
+            case MsgType.LEAVE_ROOM -> gameService.leaveRoom(roomId, userId);
+            case MsgType.SIT_DOWN -> {
+                if (cfg.getBool("maintenance_mode", false)) {
+                    send(session, err(msg, "服务器维护更新中,暂时无法进入游戏,请稍后再来"));
                     return;
                 }
-                gameService.enterRoom(roomId, userId, nickname);
+                gameService.sitDown(roomId, userId, (int) lng(data, "seat", -1), clientIp(session));
             }
-            case MsgType.LEAVE_ROOM -> gameService.leaveRoom(roomId, userId);
-            case MsgType.SIT_DOWN -> gameService.sitDown(roomId, userId, (int) lng(data, "seat", -1), clientIp(session));
             case MsgType.BUY_IN -> gameService.buyIn(roomId, userId, lng(data, "amount", 0));
-            case MsgType.STAND_UP -> gameService.standUp(roomId, userId);
+            case MsgType.STAND_UP -> gameService.standUp(roomId, userId,
+                    Boolean.TRUE.equals(data.get("confirmFine")) || lng(data, "confirmFine", 0) == 1);
             case MsgType.ACTION -> gameService.action(roomId, userId, str(data, "act"), lng(data, "amount", 0));
             case MsgType.INSURANCE_BUY -> gameService.insuranceBuy(roomId, userId, lng(data, "amount", 0));
             case MsgType.SNAPSHOT -> gameService.snapshotTo(roomId, userId);
+            case MsgType.SEAT_RESERVE_LEAVE -> gameService.seatReserveLeave(roomId, userId);
+            case MsgType.SEAT_RESERVE_RESUME -> gameService.seatReserveResume(roomId, userId);
+            case MsgType.REALTIME_STATS -> gameService.realtimeStats(roomId, userId, msg.getSequence());
+            case MsgType.DISMISS_ROOM -> gameService.dismissRoom(roomId, userId);
             case MsgType.MY_RECORDS -> {
                 int limit = (int) lng(data, "limit", 20);
                 GameMessage res = GameMessage.create(MsgType.MY_RECORDS_RES, null, Map.of(
@@ -274,6 +287,24 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
                 clubService.dissolve(lng(data, "clubId", 0), userId);
                 reply(session, msg, MsgType.CLUB_OP_RES, Map.of("op", "dissolve"));
             }
+            // 俱乐部积分(每俱乐部独立一本账,带入货币):增发/核销/上分/下分/赠送
+            case MsgType.CLUB_SCORE_OP -> {
+                long clubId = lng(data, "clubId", 0);
+                long amount = lng(data, "amount", 0);
+                long target = lng(data, "userId", 0);
+                Map<String, Object> r = switch (String.valueOf(str(data, "op"))) {
+                    case "ownerAdd" -> clubService.ownerAddScore(clubId, userId, amount);
+                    case "ownerBurn" -> clubService.ownerBurnScore(clubId, userId, amount);
+                    case "distribute" -> clubService.distributeScore(clubId, userId, target, amount);
+                    case "collect" -> clubService.collectScore(clubId, userId, target, amount);
+                    case "transfer" -> clubService.transferScore(clubId, userId, target, amount);
+                    default -> throw new DzClubService.ClubException("未知积分操作");
+                };
+                reply(session, msg, MsgType.CLUB_OP_RES, r);
+            }
+            case MsgType.CLUB_SCORE_LOGS -> reply(session, msg, MsgType.CLUB_SCORE_LOGS_RES,
+                    Map.of("logs", clubService.scoreLogs(lng(data, "clubId", 0), userId,
+                            lng(data, "userId", 0), (int) lng(data, "limit", 50))));
             default -> send(session, err(msg, "未知命令 " + msg.getType()));
         }
     }
@@ -283,7 +314,8 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
         Long userId = (Long) session.getAttributes().get(ATTR_USER_ID);
         if (userId != null) {
             registry.unbind(userId, session);
-            // 掉线不踢座:轮到他行动时超时自动过/弃,重连发 SNAPSHOT 恢复
+            // 掉线不踢座(对齐扯旋):标离线+vacationPending,代弃后自动进放假;重连进房自动回线
+            gameService.onDisconnect(userId);
             log.info("断开: userId={}, status={}", userId, status.getCode());
         }
     }

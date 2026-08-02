@@ -22,6 +22,10 @@ public final class MsgType {
     public static final int SNAPSHOT = 410;
     public static final int MY_RECORDS = 411;   // 我的战绩 {limit?}
     public static final int INSURANCE_BUY = 412; // {amount} 领先方买保险(0=放弃)
+    public static final int SEAT_RESERVE_LEAVE = 413;  // 留座暂离(放假,对齐扯旋122)
+    public static final int SEAT_RESERVE_RESUME = 414; // 回到座位(对齐扯旋123)
+    public static final int REALTIME_STATS = 415;      // 实时战绩(对齐扯旋109)
+    public static final int DISMISS_ROOM = 416;        // 解散牌局(对齐扯旋130)
 
     // -------- 俱乐部(42x) --------
     public static final int CLUB_CREATE = 420;      // {name, notice?}
@@ -34,6 +38,8 @@ public final class MsgType {
     public static final int CLUB_KICK = 427;        // {clubId, userId}
     public static final int CLUB_QUIT = 428;        // {clubId}
     public static final int CLUB_DISSOLVE = 429;    // {clubId}
+    public static final int CLUB_SCORE_OP = 430;    // {clubId, op:"ownerAdd|ownerBurn|distribute|collect|transfer", userId?, amount}
+    public static final int CLUB_SCORE_LOGS = 431;  // {clubId, userId?(群主/管理员可查他人), limit?}
 
     // ==================== S → C ====================
     public static final int LOGIN_RES = 451;
@@ -59,6 +65,12 @@ public final class MsgType {
     public static final int MY_RECORDS_RES = 471;   // {records:[...], stats:{...}}
     public static final int INSURANCE_OFFER = 472;  // 保险报价 {leaderUserId,outs,outCards,oddsX100,maxInsure,deadline}
     public static final int INSURANCE_RESULT = 473; // 保险决定/结算 {phase:"decided|settled",...}
+    public static final int SEAT_RESERVE_GRACE = 474;  // 放假状态 {userId,seat,state,reason,deadline}(对齐扯旋282/281)
+    public static final int REALTIME_STATS_RES = 475;  // 实时战绩 {players,room,history}(对齐扯旋109 ack)
+    public static final int RUN_AWAY_FINE = 476;       // 罚金 {userId,kind:EARLY_LEAVE|RUN_AWAY,amount}(对齐扯旋284)
+    public static final int PLAYER_OFFLINE = 477;      // 玩家断线 {userId,seat}(对齐扯旋208)
+    public static final int PLAYER_ONLINE = 478;       // 玩家回线 {userId,seat}(对齐扯旋207)
+    public static final int ROOM_DISMISSED = 479;      // 牌局被解散 {byUserId}(对齐扯旋285)
 
     // -------- 俱乐部(48x) --------
     public static final int CLUB_CREATE_RES = 480;
@@ -69,6 +81,8 @@ public final class MsgType {
     public static final int CLUB_MEMBERS_RES = 485;
     public static final int CLUB_OP_RES = 486;      // 设角色/踢人/退出/解散 通用回执 {op}
     public static final int CLUB_NOTIFY = 487;      // 推送:审批结果 {clubId, clubName, approve}
+    public static final int DIAMOND_WARNING = 488;  // 群主钻石不足警告 {clubId,needed}(对齐扯旋283)
+    public static final int CLUB_SCORE_LOGS_RES = 489; // 积分流水 {logs:[...]}
 
     public static final int ERROR = 499;
 }

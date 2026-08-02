@@ -93,6 +93,14 @@ CREATE TABLE IF NOT EXISTS dz_diamond_log (
 );
 CREATE INDEX idx_dz_diamond_user ON dz_diamond_log (user_id, created_at);
 
+-- 系统参数(对齐扯旋 system_config):启动播种默认值,管理后台在线调整,改了立即生效
+CREATE TABLE IF NOT EXISTS dz_system_config (
+    cfg_key     VARCHAR(64)  NOT NULL PRIMARY KEY,
+    cfg_value   VARCHAR(256) NOT NULL DEFAULT '',
+    remark      VARCHAR(256) NOT NULL DEFAULT '',
+    updated_at  DATETIME     NOT NULL
+);
+
 -- ============================================================
 -- 俱乐部体系(德州独立俱乐部,规则对齐扯旋)
 -- ============================================================
@@ -125,12 +133,34 @@ CREATE TABLE IF NOT EXISTS dz_club_member (
     level           INT          NOT NULL DEFAULT 0,
     invite_code     BIGINT       NOT NULL DEFAULT 0,
     partner_rate    INT          NOT NULL DEFAULT 0,
+    -- 俱乐部积分(对齐扯旋 ClubMember.score):每俱乐部独立一本账,带入/退筹/罚金/抽水都走它
+    score           BIGINT       NOT NULL DEFAULT 0,
     status          TINYINT      NOT NULL DEFAULT 1,
     created_at      DATETIME     NOT NULL
 );
 CREATE INDEX idx_dz_cm_club_user ON dz_club_member (club_id, user_id);
 CREATE INDEX idx_dz_cm_user ON dz_club_member (user_id);
 CREATE INDEX idx_dz_cm_invite ON dz_club_member (club_id, invite_code);
+-- 老库升级(H2/MySQL 重复执行报错由 continue-on-error 忽略)
+ALTER TABLE dz_club_member ADD COLUMN score BIGINT NOT NULL DEFAULT 0;
+
+-- 俱乐部积分流水(type 全套对齐扯旋 game_score_log):
+--   1坐下带入 2起立返还 3每局结算 4系统调整 5其他
+--   10玩家上分(成员+) 11玩家下分(成员-) 12赠送转出 13赠送转入 14增发积分 15提取红利(抽水分成)
+--   16玩家上分(操作者-) 17玩家下分(操作者+) 18礼物赠送 19逃跑惩罚(玩家-) 20逃跑惩罚(群主+) 21核销积分
+CREATE TABLE IF NOT EXISTS dz_score_log (
+    id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+    club_id         BIGINT       NOT NULL,
+    user_id         BIGINT       NOT NULL,
+    other_user_id   BIGINT       NOT NULL DEFAULT 0,
+    type            INT          NOT NULL,
+    amount          BIGINT       NOT NULL,
+    before_score    BIGINT       NOT NULL DEFAULT 0,
+    after_score     BIGINT       NOT NULL DEFAULT 0,
+    remark          VARCHAR(128) NOT NULL DEFAULT '',
+    created_at      DATETIME     NOT NULL
+);
+CREATE INDEX idx_dz_sl_user ON dz_score_log (club_id, user_id, created_at);
 
 -- 入会申请(status: 0待审 1已同意 2已拒绝;code_type: 1俱乐部号 2邀请码)
 CREATE TABLE IF NOT EXISTS dz_club_join_request (

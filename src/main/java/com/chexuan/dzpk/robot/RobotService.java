@@ -68,14 +68,41 @@ public class RobotService {
     /** roomId → 已被机器人预定但坐下还没落地的座位(防并发抢同一座位) */
     private final Map<Long, Set<Integer>> reservedSeats = new ConcurrentHashMap<>();
 
-    public RobotService(DzRoomManager roomManager, @Lazy DzGameService gameService) {
+    /** 系统参数中心(可为 null,退回 @Value 默认) */
+    private final com.chexuan.dzpk.config.DzConfigService cfg;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public RobotService(DzRoomManager roomManager, @Lazy DzGameService gameService,
+                        com.chexuan.dzpk.config.DzConfigService cfg) {
         this.roomManager = roomManager;
         this.gameService = gameService;
+        this.cfg = cfg;
         this.scheduler = Executors.newScheduledThreadPool(2, r -> {
             Thread t = new Thread(r, "dzpk-robot");
             t.setDaemon(true);
             return t;
         });
+    }
+
+    /** 单测用 */
+    public RobotService(DzRoomManager roomManager, DzGameService gameService) {
+        this(roomManager, gameService, null);
+    }
+
+    private boolean robotEnabled() {
+        return cfg != null ? cfg.getBool("robot_enabled", enabled) : enabled;
+    }
+
+    private int robotFillCount() {
+        return cfg != null ? cfg.getInt("robot_fill_count", fillCount) : fillCount;
+    }
+
+    private long robotMinDelay() {
+        return cfg != null ? cfg.getLong("robot_min_delay_ms", minDelayMs) : minDelayMs;
+    }
+
+    private long robotMaxDelay() {
+        return cfg != null ? cfg.getLong("robot_max_delay_ms", maxDelayMs) : maxDelayMs;
     }
 
     public boolean isRobot(long userId) {
@@ -88,7 +115,7 @@ public class RobotService {
 
     /** 房间广播 → 机器人观察 */
     public void onRoomMessage(long roomId, GameMessage msg) {
-        if (!enabled || msg.getType() == null) return;
+        if (!robotEnabled() || msg.getType() == null) return;
         Map<String, Object> data = dataMap(msg);
         switch (msg.getType()) {
             case MsgType.PLAYER_SIT, MsgType.BUY_IN_RES, MsgType.PLAYER_ENTER, MsgType.ROOM_STATE ->
@@ -148,7 +175,7 @@ public class RobotService {
             }
             if (freeSeat == -1 && !reserved.contains(i)) freeSeat = i;
         }
-        if (!humanSeated || robots.size() >= fillCount || freeSeat == -1) return;
+        if (!humanSeated || robots.size() >= robotFillCount() || freeSeat == -1) return;
         reserved.add(freeSeat);
 
         long robotId = idGen.getAndIncrement();
@@ -162,7 +189,7 @@ public class RobotService {
         gameService.buyIn(roomId, robotId, buyin);
 
         // 还没补够 → 下一轮继续(错峰进场更拟真)
-        if (robots.size() < fillCount) {
+        if (robots.size() < robotFillCount()) {
             schedule(() -> fillCheck(roomId), 1200 + ThreadLocalRandom.current().nextLong(1500));
         }
     }
@@ -328,7 +355,7 @@ public class RobotService {
     }
 
     private long randDelay() {
-        return minDelayMs + ThreadLocalRandom.current().nextLong(Math.max(1, maxDelayMs - minDelayMs));
+        return robotMinDelay() + ThreadLocalRandom.current().nextLong(Math.max(1, robotMaxDelay() - robotMinDelay()));
     }
 
     private void schedule(Runnable task, long delayMs) {

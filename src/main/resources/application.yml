@@ -39,8 +39,27 @@ dzpk:
   action-timeout-secs: 15
   # 一手结束到下一手开始的间隔(秒)
   next-hand-delay-secs: 4
-  # 周期结算/打光后,补带入等待时长(秒),超时自动站起
-  await-buyin-secs: 30
+  # 周期结算/打光后,补带入等待时长(秒),超时自动站起(对齐扯旋 period_settle_bringin_seconds=10)
+  await-buyin-secs: 10
+
+  # ---------- 留座暂离/放假(对齐扯旋 seatReserve) ----------
+  # 放假倒计时(秒),每结算周期只能用一次,超时自动站起
+  seat-reserve-grace-secs: 300
+  # 放假超时站起后,座位再物理保留给本人的时长(秒)
+  seat-lock-secs: 480
+
+  # ---------- 赢家离桌罚金(对齐扯旋 284,仅俱乐部房) ----------
+  # 赢家早退过路费率%(盈利离桌扣给群主)
+  winner-early-leave-rate: 30
+  # 逃跑罚金开关(累计离线过长再离桌加罚,扯旋默认关)
+  run-away-enabled: false
+  run-away-time-mins: 6
+  run-away-penalty-rate: 30
+
+  # ---------- 圈主周期扣钻(对齐扯旋 commission_settle_diamond_cost) ----------
+  # 每结算周期扣群主钻石(俱乐部房第一手预付+到点续扣);0=不扣。
+  # 群主无主服账号(开发/机器人环境)自动跳过。
+  owner-period-diamond-cost: 5
 
   # 机器人(陪打测试)
   robot:

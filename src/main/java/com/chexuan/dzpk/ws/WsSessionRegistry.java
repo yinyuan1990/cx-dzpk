@@ -46,6 +46,15 @@ public class WsSessionRegistry implements GameBroadcaster {
                 v.getId().equals(session.getId()) ? null : v);
     }
 
+    /** 当前在线连接数(管理后台监控用) */
+    public int onlineCount() {
+        int n = 0;
+        for (WebSocketSession s : sessions.values()) {
+            if (s.isOpen()) n++;
+        }
+        return n;
+    }
+
     @Override
     public void toUser(long userId, GameMessage msg) {
         WebSocketSession session = sessions.get(userId);
