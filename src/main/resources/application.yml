@@ -24,6 +24,15 @@ dzpk:
   next-hand-delay-secs: 4
   # 周期结算/打光后,补带入等待时长(秒),超时自动站起
   await-buyin-secs: 30
+
+  # 机器人(陪打测试)
+  robot:
+    enabled: true
+    # 每个房间补足的机器人数量(有真人在座才进场,真人全走自动撤)
+    fill-count: 2
+    # 行动延迟范围(毫秒),拟真思考时间
+    min-delay-ms: 800
+    max-delay-ms: 2500
   # 游客初始金币(内存钱包,接主服 internal wallet 前的桩)
   guest-init-balance: 1000000
 
