@@ -1,6 +1,8 @@
 package com.chexuan.dzpk.ws;
 
 import com.chexuan.dzpk.auth.JwtVerifier;
+import com.chexuan.dzpk.db.DiamondService;
+import com.chexuan.dzpk.db.DzRecordStore;
 import com.chexuan.dzpk.game.model.DzRoom;
 import com.chexuan.dzpk.game.service.DzGameService;
 import com.chexuan.dzpk.game.service.DzRoomManager;
@@ -41,19 +43,28 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
     private final DzGameService gameService;
     private final DzRoomManager roomManager;
     private final WalletService walletService;
+    private final DiamondService diamondService;
+    private final DzRecordStore records;
 
     @Value("${dzpk.allow-guest:false}")
     private boolean allowGuest;
 
+    /** 创建房间扣钻石(0=不扣;游客/机器人无主服账号,不扣) */
+    @Value("${dzpk.create-room-diamond-cost:0}")
+    private long createRoomDiamondCost;
+
     public DzWebSocketHandler(ObjectMapper objectMapper, JwtVerifier jwtVerifier,
                               WsSessionRegistry registry, DzGameService gameService,
-                              DzRoomManager roomManager, WalletService walletService) {
+                              DzRoomManager roomManager, WalletService walletService,
+                              DiamondService diamondService, DzRecordStore records) {
         this.objectMapper = objectMapper;
         this.jwtVerifier = jwtVerifier;
         this.registry = registry;
         this.gameService = gameService;
         this.roomManager = roomManager;
         this.walletService = walletService;
+        this.diamondService = diamondService;
+        this.records = records;
     }
 
     @Override
@@ -115,7 +126,8 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
 
         GameMessage res = GameMessage.create(MsgType.LOGIN_RES, null, Map.of(
                 "userId", userId, "nickname", nickname,
-                "balance", walletService.balance(userId)));
+                "balance", walletService.balance(userId),
+                "diamond", diamondService.balance(userId)));
         res.setSequence(msg.getSequence());
         send(session, res);
         log.info("登录: userId={}, nickname={}", userId, nickname);
@@ -160,16 +172,34 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
                     send(session, err(msg, "创建参数非法"));
                     return;
                 }
+                // 建房扣钻石(公用货币,主库 user.diamond;游客/机器人无主服账号跳过)
+                long cost = 0;
+                if (createRoomDiamondCost > 0 && diamondService.hasMainAccount(userId)) {
+                    if (!diamondService.debit(userId, createRoomDiamondCost, "create_room", "德州建房")) {
+                        send(session, err(msg, "钻石不足,创建房间需要 " + createRoomDiamondCost + " 钻石"));
+                        return;
+                    }
+                    cost = createRoomDiamondCost;
+                }
                 DzRoom room = roomManager.create(name, userId, sb, bb, maxPlayers, settleTimeMins, rakePercent);
-                GameMessage res = GameMessage.create(MsgType.CREATE_ROOM_RES, room.getRoomId(), Map.of(
-                        "roomId", room.getRoomId(), "name", room.getName(),
-                        "sb", sb, "bb", bb, "maxPlayers", maxPlayers,
-                        "settleTimeMins", settleTimeMins, "rakePercent", rakePercent,
-                        "minBuyin", room.getMinBuyin(), "maxBuyin", room.getMaxBuyin()));
+                records.saveRoomCreated(room, cost);
+                Map<String, Object> resData = new LinkedHashMap<>();
+                resData.put("roomId", room.getRoomId());
+                resData.put("name", room.getName());
+                resData.put("sb", sb);
+                resData.put("bb", bb);
+                resData.put("maxPlayers", maxPlayers);
+                resData.put("settleTimeMins", settleTimeMins);
+                resData.put("rakePercent", rakePercent);
+                resData.put("minBuyin", room.getMinBuyin());
+                resData.put("maxBuyin", room.getMaxBuyin());
+                resData.put("diamondCost", cost);
+                resData.put("diamond", diamondService.balance(userId));
+                GameMessage res = GameMessage.create(MsgType.CREATE_ROOM_RES, room.getRoomId(), resData);
                 res.setSequence(msg.getSequence());
                 send(session, res);
-                log.info("创建房间: roomId={}, name={}, sb/bb={}/{}, settle={}min, rake={}%",
-                        room.getRoomId(), name, sb, bb, settleTimeMins, rakePercent);
+                log.info("创建房间: roomId={}, name={}, sb/bb={}/{}, settle={}min, rake={}%, 钻石={}",
+                        room.getRoomId(), name, sb, bb, settleTimeMins, rakePercent, cost);
             }
             case MsgType.ENTER_ROOM -> gameService.enterRoom(roomId, userId, nickname);
             case MsgType.LEAVE_ROOM -> gameService.leaveRoom(roomId, userId);
@@ -178,6 +208,14 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
             case MsgType.STAND_UP -> gameService.standUp(roomId, userId);
             case MsgType.ACTION -> gameService.action(roomId, userId, str(data, "act"), lng(data, "amount", 0));
             case MsgType.SNAPSHOT -> gameService.snapshotTo(roomId, userId);
+            case MsgType.MY_RECORDS -> {
+                int limit = (int) lng(data, "limit", 20);
+                GameMessage res = GameMessage.create(MsgType.MY_RECORDS_RES, null, Map.of(
+                        "records", records.myRecords(userId, limit),
+                        "stats", records.myStats(userId)));
+                res.setSequence(msg.getSequence());
+                send(session, res);
+            }
             default -> send(session, err(msg, "未知命令 " + msg.getType()));
         }
     }

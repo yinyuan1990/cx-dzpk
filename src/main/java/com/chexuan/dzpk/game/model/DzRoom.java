@@ -3,6 +3,7 @@ package com.chexuan.dzpk.game.model;
 import com.chexuan.dzpk.game.card.Card;
 import com.chexuan.dzpk.game.card.Deck;
 import com.chexuan.dzpk.game.engine.Pot;
+import com.chexuan.dzpk.game.engine.PotManager;
 import lombok.Getter;
 import lombok.Setter;
 
@@ -71,6 +72,11 @@ public class DzRoom {
     private long collectedPot;
     /** 结算切好的池 */
     private List<Pot> pots = new ArrayList<>();
+    /**
+     * 本手的"死钱":局中已弃牌先行站起的玩家,座位清了但投入必须留在池里,
+     * 摊牌切池时并入 contributions(folded=true,只进池不参与分池)。
+     */
+    private final List<PotManager.Contribution> deadContributions = new ArrayList<>();
 
     /** 行动超时任务(换人行动时取消重排) */
     private ScheduledFuture<?> actionTimeout;

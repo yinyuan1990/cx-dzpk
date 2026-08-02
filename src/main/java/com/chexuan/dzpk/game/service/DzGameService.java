@@ -1,5 +1,6 @@
 package com.chexuan.dzpk.game.service;
 
+import com.chexuan.dzpk.db.DzRecordStore;
 import com.chexuan.dzpk.game.card.BiPai;
 import com.chexuan.dzpk.game.card.Card;
 import com.chexuan.dzpk.game.card.Deck;
@@ -41,6 +42,7 @@ public class DzGameService {
     private final RoomWorkerService roomWorker;
     private final WalletService walletService;
     private final GameBroadcaster broadcaster;
+    private final DzRecordStore records;
 
     @Value("${dzpk.action-timeout-secs:15}")
     private int actionTimeoutSecs;
@@ -51,12 +53,21 @@ public class DzGameService {
     @Value("${dzpk.await-buyin-secs:30}")
     private int awaitBuyinSecs;
 
+    @org.springframework.beans.factory.annotation.Autowired
     public DzGameService(DzRoomManager roomManager, RoomWorkerService roomWorker,
-                         WalletService walletService, GameBroadcaster broadcaster) {
+                         WalletService walletService, GameBroadcaster broadcaster,
+                         DzRecordStore records) {
         this.roomManager = roomManager;
         this.roomWorker = roomWorker;
         this.walletService = walletService;
         this.broadcaster = broadcaster;
+        this.records = records;
+    }
+
+    /** 单测用:不落库 */
+    public DzGameService(DzRoomManager roomManager, RoomWorkerService roomWorker,
+                         WalletService walletService, GameBroadcaster broadcaster) {
+        this(roomManager, roomWorker, walletService, broadcaster, new DzRecordStore(null));
     }
 
     // ================================================================
@@ -90,6 +101,7 @@ public class DzGameService {
             if (room.getMembers().isEmpty() && !room.inGame()) {
                 roomManager.remove(roomId);
                 roomWorker.removeRoom(roomId);
+                records.markRoomClosed(roomId);
                 log.info("房间清空销毁: roomId={}", roomId);
             }
         });
@@ -176,13 +188,33 @@ public class DzGameService {
         });
     }
 
+    /**
+     * 站起(对齐扯旋语义):
+     *   牌局中且未弃牌 → 只标记 pendingStandUp,这一手继续打完,局末真正站起;
+     *   已弃牌 / 局间 → 立即站起结算。
+     * 两种情况都给申请者即时回执 STAND_UP_RES {pending}。
+     */
     public void standUp(long roomId, long userId) {
         DzRoom room = roomManager.get(roomId);
         if (room == null) return;
         roomWorker.submit(roomId, () -> {
             DzPlayer p = room.playerByUserId(userId);
-            if (p == null) return;
+            if (p == null) {
+                sendError(userId, roomId, "不在座位上");
+                return;
+            }
+            if (room.inGame() && p.isInHand() && !p.isFolded()) {
+                boolean first = !p.isPendingStandUp();
+                p.setPendingStandUp(true);
+                broadcaster.toUser(userId, GameMessage.create(MsgType.STAND_UP_RES, roomId, Map.of(
+                        "pending", true, "seat", p.getSeat(),
+                        "msg", first ? "本手结束后自动站起" : "已申请,本手结束后自动站起")));
+                log.info("申请站起(局末生效): roomId={}, userId={}", roomId, userId);
+                return;
+            }
             doStandUp(room, p, "standup");
+            broadcaster.toUser(userId, GameMessage.create(MsgType.STAND_UP_RES, roomId, Map.of(
+                    "pending", false)));
         });
     }
 
@@ -230,6 +262,7 @@ public class DzGameService {
         room.getBoard().clear();
         room.setPots(new ArrayList<>());
         room.setCollectedPot(0);
+        room.getDeadContributions().clear();
         room.setDeck(new Deck());
 
         for (DzPlayer p : room.getSeats()) {
@@ -504,8 +537,8 @@ public class DzGameService {
             p.setHandResult(BiPai.evaluate(seven));
         }
 
-        // 切池
-        List<PotManager.Contribution> contributions = new ArrayList<>();
+        // 切池(死钱:局中弃牌先走的玩家投入,只进池不参与分池)
+        List<PotManager.Contribution> contributions = new ArrayList<>(room.getDeadContributions());
         for (DzPlayer p : room.getSeats()) {
             if (p == null || p.getTotalBetThisHand() <= 0) continue;
             contributions.add(new PotManager.Contribution(p.getUserId(), p.getTotalBetThisHand(), !p.contesting()));
@@ -589,6 +622,9 @@ public class DzGameService {
         room.setStage(GameStage.FINISHED);
         long roomId = room.getRoomId();
 
+        // 每手战绩落库(参与者每人一行;局中先走的已由 doStandUp 单独补行)
+        records.saveHandRecords(room);
+
         for (DzPlayer p : room.getSeats().clone()) {
             if (p == null) continue;
             if (p.isInHand()) {
@@ -651,6 +687,7 @@ public class DzGameService {
             walletService.credit(p.getUserId(), refund);
         }
         p.setStack(0);
+        records.saveSettleRecord(room, p, "period", bringIn, stack, profit, rake, refund, playedMs / 1000);
         log.info("周期结算: roomId={}, userId={}, played={}s, bringIn={}, stack={}, profit={}, rake={}, refund={}",
                 room.getRoomId(), p.getUserId(), playedMs / 1000, bringIn, stack, profit, rake, refund);
 
@@ -696,10 +733,12 @@ public class DzGameService {
     }
 
     /**
-     * 站起 — 结清本周期(盈利抽水)后离座。牌局中站起先弃牌。
+     * 真正站起 — 结清本周期(盈利抽水→退钱包→写 dz_settle_record)后离座。
+     * 牌局中未弃牌不允许直接到这(standUp 入口拦成 pending);
+     * 只有 leaveRoom(离房)会强制走:先弃牌,若这手还没完则转 pending 由局末处理。
      */
     private void doStandUp(DzRoom room, DzPlayer p, String reason) {
-        // 牌局中 → 先弃牌;正轮到他行动则推进牌局
+        // 离房强制路径:牌局中未弃牌 → 先弃牌;正轮到他行动则推进牌局
         if (room.inGame() && p.isInHand() && !p.isFolded()) {
             if (room.getActingSeat() == p.getSeat()) {
                 handleAction(room, p.getUserId(), ActionType.FOLD, 0, true);
@@ -713,21 +752,53 @@ public class DzGameService {
             }
         }
 
+        // 局中已弃牌立即站起:座位要清,但投入是死钱必须留在池里,战绩也补上这一手
+        if (room.inGame() && p.isInHand()) {
+            room.setCollectedPot(room.getCollectedPot() + p.getBetThisRound());
+            if (p.getTotalBetThisHand() > 0) {
+                room.getDeadContributions().add(
+                        new PotManager.Contribution(p.getUserId(), p.getTotalBetThisHand(), true));
+            }
+            p.setNetWin(-p.getTotalBetThisHand());
+            p.setHandCount(p.getHandCount() + 1);
+            if (p.getNetWin() < 0) p.setLoseCount(p.getLoseCount() + 1);
+            records.saveHandRecordForLeaver(room, p);
+            p.setBetThisRound(0);
+        }
+
         p.closeGate();
+        long playedSecs = p.getGameTimeAccumMs() / 1000;
         long stack = p.getStack();
-        long profit = stack - p.getBringInThisPeriod();
+        long bringIn = p.getBringInThisPeriod();
+        long profit = stack - bringIn;
         long rake = (profit > 0 && room.getRakePercent() > 0) ? profit * room.getRakePercent() / 100 : 0;
         long refund = stack - rake;
         if (refund > 0) {
             walletService.credit(p.getUserId(), refund);
         }
+        // 空周期(周期结算后没再带入就走)不写记录
+        if (bringIn > 0 || stack > 0 || p.getHandCount() > 0) {
+            records.saveSettleRecord(room, p, reason, bringIn, stack, profit, rake, refund, playedSecs);
+        }
         room.getSeats()[p.getSeat()] = null;
-        broadcaster.toRoom(room.getRoomId(), GameMessage.create(MsgType.PLAYER_STAND, room.getRoomId(), Map.of(
-                "userId", p.getUserId(), "seat", p.getSeat(), "reason", reason,
-                "refund", refund, "rake", rake,
-                "balance", walletService.balance(p.getUserId()))));
-        log.info("站起: roomId={}, userId={}, reason={}, refund={}, rake={}",
-                room.getRoomId(), p.getUserId(), reason, refund, rake);
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("userId", p.getUserId());
+        data.put("seat", p.getSeat());
+        data.put("reason", reason);
+        data.put("bringIn", bringIn);
+        data.put("finalStack", stack);
+        data.put("profit", profit);
+        data.put("rake", rake);
+        data.put("refund", refund);
+        data.put("handCount", p.getHandCount());
+        data.put("winCount", p.getWinCount());
+        data.put("loseCount", p.getLoseCount());
+        data.put("playedSecs", playedSecs);
+        data.put("balance", walletService.balance(p.getUserId()));
+        broadcaster.toRoom(room.getRoomId(), GameMessage.create(MsgType.PLAYER_STAND, room.getRoomId(), data));
+        log.info("站起: roomId={}, userId={}, reason={}, bringIn={}, stack={}, profit={}, rake={}, refund={}",
+                room.getRoomId(), p.getUserId(), reason, bringIn, stack, profit, rake, refund);
     }
 
     // ================================================================

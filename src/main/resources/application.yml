@@ -2,6 +2,23 @@ spring:
   application:
     name: chexuan-dzpk
 
+  # 数据库 — 战绩/结算/钱包落库 + 钻石公用。
+  # 架构:每个子游戏独立一个库(德州=cx_dzpk),与主库 chexuan_game 同一 MySQL 实例;
+  #   钻石本体在主库 user.diamond,德州跨库原子扣减(见 dzpk.diamond-user-table)。
+  # 开发默认 H2 内存库(MODE=MySQL,零配置起服);生产用环境变量覆盖:
+  #   SPRING_DATASOURCE_URL=jdbc:mysql://mysql:3306/cx_dzpk?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&createDatabaseIfNotExist=true
+  #   SPRING_DATASOURCE_USERNAME=root  SPRING_DATASOURCE_PASSWORD=***
+  #   DZPK_DIAMOND_USER_TABLE=chexuan_game.user
+  datasource:
+    url: jdbc:h2:mem:dzpk;MODE=MySQL;DB_CLOSE_DELAY=-1
+    username: sa
+    password: ""
+  sql:
+    init:
+      mode: always
+      # schema.sql 全部 CREATE TABLE IF NOT EXISTS;CREATE INDEX 重复报错忽略(MySQL 无 IF NOT EXISTS)
+      continue-on-error: true
+
   jackson:
     time-zone: GMT+8
     date-format: yyyy-MM-dd HH:mm:ss
@@ -33,8 +50,14 @@ dzpk:
     # 行动延迟范围(毫秒),拟真思考时间
     min-delay-ms: 800
     max-delay-ms: 2500
-  # 游客初始金币(内存钱包,接主服 internal wallet 前的桩)
+  # 游客/新钱包初始金币(dz_user_wallet 首次访问时的初始余额;上线接主服积分后置 0)
   guest-init-balance: 1000000
+  # 创建房间扣钻石(主库 user.diamond,原子扣减 + dz_diamond_log 流水);0=不扣。
+  # 游客/机器人(id>=8亿)没有主服账号,不扣。
+  create-room-diamond-cost: 0
+  # 钻石所在的用户表(钻石公用核心):开发 H2 用本库最小 user 表;
+  # 生产配 chexuan_game.user 跨库直达主服钻石。
+  diamond-user-table: "`user`"
 
 logging:
   level:

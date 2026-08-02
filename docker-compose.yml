@@ -1,6 +1,10 @@
 # 德州子游戏 — 独立 compose 项目,与扯旋(chexuan)互不影响
 # 部署目录: /home/fzcx/cx-dzpk (每个子游戏单独一个文件夹,与 /home/fzcx/chexuan 平级)
 # 宿主端口 19100 → 容器 9100
+#
+# 数据库:独立库 cx_dzpk(自动建库),与主库 chexuan_game 同一 MySQL 实例;
+#   挂进扯旋的 chexuan-net 网络直连 mysql:3306(容器别名),不占宿主端口。
+#   钻石公用:DZPK_DIAMOND_USER_TABLE 跨库指到主库 chexuan_game.user。
 services:
   dzpk:
     build: .
@@ -9,6 +13,13 @@ services:
       - "19100:9100"
     environment:
       TZ: Asia/Shanghai
+      SPRING_DATASOURCE_URL: "jdbc:mysql://mysql:3306/cx_dzpk?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&createDatabaseIfNotExist=true"
+      SPRING_DATASOURCE_USERNAME: root
+      SPRING_DATASOURCE_PASSWORD: "Fz2025qq@"
+      DZPK_DIAMOND_USER_TABLE: chexuan_game.user
+    networks:
+      - default
+      - chexuan-net
     restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:9100/index.html || exit 1"]
@@ -21,3 +32,7 @@ services:
       options:
         max-size: "50m"
         max-file: "3"
+
+networks:
+  chexuan-net:
+    external: true

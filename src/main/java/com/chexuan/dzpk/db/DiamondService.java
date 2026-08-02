@@ -1,0 +1,91 @@
+package com.chexuan.dzpk.db;
+
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Service;
+
+import java.sql.Timestamp;
+
+/**
+ * 钻石(全平台公用货币) — 本体在主库 user.diamond,不在德州自己库里记账本。
+ * 同一 MySQL 实例跨库直达:dzpk.diamond-user-table 生产配 chexuan_game.user,
+ * 扣减用「UPDATE ... WHERE diamond >= ?」原子条件更新,与主服并发安全;
+ * 德州侧变动记 dz_diamond_log 流水。
+ * 游客/机器人(id >= 8亿)没有主服账号,一律余额 0、不可扣。
+ */
+@Slf4j
+@Service
+public class DiamondService {
+
+    /** 8亿以上是德州本地 id 段(机器人 8亿/游客 9亿),主服无此账号 */
+    public static final long LOCAL_ID_BASE = 800_000_000L;
+
+    private final JdbcTemplate jdbc;
+
+    @Value("${dzpk.diamond-user-table:`user`}")
+    private String userTable;
+
+    public DiamondService(JdbcTemplate jdbc) {
+        this.jdbc = jdbc;
+    }
+
+    public boolean hasMainAccount(long userId) {
+        return userId > 0 && userId < LOCAL_ID_BASE;
+    }
+
+    /** 钻石余额;游客/机器人/查询失败返回 0 */
+    public long balance(long userId) {
+        if (jdbc == null || !hasMainAccount(userId)) return 0;
+        try {
+            Long v = jdbc.query("SELECT diamond FROM " + userTable + " WHERE id = ?",
+                    rs -> rs.next() ? rs.getLong(1) : null, userId);
+            return v != null ? v : 0;
+        } catch (Exception e) {
+            log.error("钻石余额查询失败: userId={}", userId, e);
+            return 0;
+        }
+    }
+
+    /** 扣钻石(原子:余额不足不扣,返回 false)+ 记流水 */
+    public boolean debit(long userId, long amount, String type, String remark) {
+        if (amount <= 0) return true;
+        if (jdbc == null || !hasMainAccount(userId)) return false;
+        try {
+            int n = jdbc.update("UPDATE " + userTable + " SET diamond = diamond - ? WHERE id = ? AND diamond >= ?",
+                    amount, userId, amount);
+            if (n <= 0) return false;
+            logChange(userId, -amount, type, remark);
+            return true;
+        } catch (Exception e) {
+            log.error("扣钻石失败: userId={}, amount={}, type={}", userId, amount, type, e);
+            return false;
+        }
+    }
+
+    /** 加钻石 + 记流水 */
+    public boolean credit(long userId, long amount, String type, String remark) {
+        if (amount <= 0) return true;
+        if (jdbc == null || !hasMainAccount(userId)) return false;
+        try {
+            int n = jdbc.update("UPDATE " + userTable + " SET diamond = diamond + ? WHERE id = ?", amount, userId);
+            if (n <= 0) return false;
+            logChange(userId, amount, type, remark);
+            return true;
+        } catch (Exception e) {
+            log.error("加钻石失败: userId={}, amount={}, type={}", userId, amount, type, e);
+            return false;
+        }
+    }
+
+    private void logChange(long userId, long amount, String type, String remark) {
+        try {
+            jdbc.update("INSERT INTO dz_diamond_log (user_id, amount, balance_after, type, remark, created_at) " +
+                            "VALUES (?,?,?,?,?,?)",
+                    userId, amount, balance(userId), type, remark == null ? "" : remark,
+                    new Timestamp(System.currentTimeMillis()));
+        } catch (Exception e) {
+            log.error("钻石流水写入失败: userId={}", userId, e);
+        }
+    }
+}

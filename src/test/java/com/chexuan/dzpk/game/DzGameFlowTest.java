@@ -125,6 +125,55 @@ class DzGameFlowTest {
     }
 
     @Test
+    void 牌局中站起_只标记pending_打完这手才离座() {
+        DzRoom room = createRoomAndSeat3(30);
+        startHandNow(room);
+        waitUntil(() -> room.getStage() == GameStage.PREFLOP && room.getActingSeat() != -1, 3000);
+
+        // 牌局中(未弃牌)申请站起 → 不弃牌不离座,只挂 pending + 即时回执
+        game.standUp(room.getRoomId(), U1);
+        waitUntil(() -> room.playerByUserId(U1) != null && room.playerByUserId(U1).isPendingStandUp(), 3000);
+        DzPlayer p1 = room.playerByUserId(U1);
+        assertFalse(p1.isFolded(), "申请站起不应替玩家弃牌,这手继续打");
+        GameMessage res = lastUserMsg(MsgType.STAND_UP_RES);
+        assertNotNull(res, "应有 STAND_UP_RES 即时回执");
+        assertEquals(Boolean.TRUE, ((java.util.Map<?, ?>) res.getData()).get("pending"));
+
+        // 打完这手 → 局末真正站起离座,收到 PLAYER_STAND
+        playHandAllCall(room);
+        waitUntil(() -> room.playerByUserId(U1) == null, 8000);
+        assertNotNull(bc.last(MsgType.PLAYER_STAND), "局末应广播 PLAYER_STAND");
+    }
+
+    @Test
+    void 已弃牌_立即站起_死钱留在池里() {
+        DzRoom room = createRoomAndSeat3(30);
+        startHandNow(room);
+        waitUntil(() -> room.getStage() == GameStage.PREFLOP && room.getActingSeat() != -1, 3000);
+
+        // 座位0=庄(先行动)跟注;座位1=小盲弃牌(池里留 50 死钱)
+        DzPlayer utg = actingPlayer(room);
+        game.action(room.getRoomId(), utg.getUserId(), "call", 0);
+        waitUntil(() -> actingPlayer(room) != null && actingPlayer(room) != utg, 3000);
+        DzPlayer sb = actingPlayer(room);
+        long sbUid = sb.getUserId();
+        game.action(room.getRoomId(), sbUid, "fold", 0);
+        waitUntil(() -> room.playerByUserId(sbUid).isFolded(), 3000);
+
+        // 已弃牌 → 立即站起,座位马上清空,牌局继续
+        game.standUp(room.getRoomId(), sbUid);
+        waitUntil(() -> room.playerByUserId(sbUid) == null, 3000);
+        assertTrue(room.inGame(), "剩两家牌局应继续");
+        // 死钱(小盲50)退不回:退回钱包 = 带入10000 - 50
+        assertEquals(INIT_BALANCE - 50, wallet.balance(sbUid), "弃牌投入的 50 是死钱,不退");
+
+        // 剩两家打完 → 桌面筹码 = 2万 + 死钱50(筹码守恒)
+        playHandAllCall(room);
+        waitUntil(() -> room.getStage() == GameStage.FINISHED || room.getStage() == GameStage.WAITING, 8000);
+        assertEquals(20050, stackSum(room), "死钱应留在池里被赢家拿走");
+    }
+
+    @Test
     void 周期结算_到期抽水退筹_等补带入() {
         DzRoom room = createRoomAndSeat3(1);  // 结算时间 1 分钟
         startHandNow(room);
@@ -209,6 +258,13 @@ class DzGameFlowTest {
     private DzPlayer actingPlayer(DzRoom room) {
         int seat = room.getActingSeat();
         return seat >= 0 ? room.playerAtSeat(seat) : null;
+    }
+
+    private GameMessage lastUserMsg(int type) {
+        for (int i = bc.userMsgs.size() - 1; i >= 0; i--) {
+            if (bc.userMsgs.get(i).getType() == type) return bc.userMsgs.get(i);
+        }
+        return null;
     }
 
     private long stackSum(DzRoom room) {

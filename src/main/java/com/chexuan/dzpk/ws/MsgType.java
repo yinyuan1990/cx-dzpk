@@ -20,6 +20,7 @@ public final class MsgType {
     public static final int STAND_UP = 408;
     public static final int ACTION = 409;       // {act:"fold|check|call|raise|allin", amount(raise-to)}
     public static final int SNAPSHOT = 410;
+    public static final int MY_RECORDS = 411;   // 我的战绩 {limit?}
 
     // ==================== S → C ====================
     public static final int LOGIN_RES = 451;
@@ -41,6 +42,8 @@ public final class MsgType {
     public static final int PLAYER_LEAVE = 467;
     public static final int PERIOD_SETTLE = 468;    // 周期结算面板(补带入等待)
     public static final int ROOM_STATE = 469;       // WAITING/FINISHED 等房态变化
+    public static final int STAND_UP_RES = 470;     // 站起回执 {pending:牌局中申请,本手结束生效}
+    public static final int MY_RECORDS_RES = 471;   // {records:[...], stats:{...}}
 
     public static final int ERROR = 499;
 }
