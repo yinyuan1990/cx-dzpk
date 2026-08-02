@@ -19,6 +19,16 @@ public class DzPlayer {
     /** 桌上筹码 */
     private long stack;
 
+    /** 坐下时的客户端 IP(AccessRule 同 IP 限制用,机器人为 null) */
+    private String ip;
+
+    // ==================== 入池率统计(vpOn) ====================
+
+    /** 本周期主动入池手数(翻前主动跟注/加注) */
+    private int vpipCount;
+    /** 本手是否已计过入池(防重复) */
+    private boolean vpipThisHand;
+
     // ==================== 本手牌状态 ====================
 
     /** 本手是否参与(开局时在座且有筹码) */
@@ -99,6 +109,7 @@ public class DzPlayer {
         handCount = 0;
         winCount = 0;
         loseCount = 0;
+        vpipCount = 0;
         settlePeriodSeq++;
     }
 
@@ -113,6 +124,7 @@ public class DzPlayer {
         holeCards = null;
         handResult = null;
         netWin = 0;
+        vpipThisHand = false;
     }
 
     /** 进入下一条街前重置本轮状态 */

@@ -21,6 +21,7 @@ public final class MsgType {
     public static final int ACTION = 409;       // {act:"fold|check|call|raise|allin", amount(raise-to)}
     public static final int SNAPSHOT = 410;
     public static final int MY_RECORDS = 411;   // 我的战绩 {limit?}
+    public static final int INSURANCE_BUY = 412; // {amount} 领先方买保险(0=放弃)
 
     // -------- 俱乐部(42x) --------
     public static final int CLUB_CREATE = 420;      // {name, notice?}
@@ -56,6 +57,8 @@ public final class MsgType {
     public static final int ROOM_STATE = 469;       // WAITING/FINISHED 等房态变化
     public static final int STAND_UP_RES = 470;     // 站起回执 {pending:牌局中申请,本手结束生效}
     public static final int MY_RECORDS_RES = 471;   // {records:[...], stats:{...}}
+    public static final int INSURANCE_OFFER = 472;  // 保险报价 {leaderUserId,outs,outCards,oddsX100,maxInsure,deadline}
+    public static final int INSURANCE_RESULT = 473; // 保险决定/结算 {phase:"decided|settled",...}
 
     // -------- 俱乐部(48x) --------
     public static final int CLUB_CREATE_RES = 480;

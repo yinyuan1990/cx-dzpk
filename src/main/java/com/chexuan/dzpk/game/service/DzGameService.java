@@ -11,6 +11,12 @@ import com.chexuan.dzpk.game.model.ActionType;
 import com.chexuan.dzpk.game.model.DzPlayer;
 import com.chexuan.dzpk.game.model.DzRoom;
 import com.chexuan.dzpk.game.model.GameStage;
+import com.chexuan.dzpk.game.rules.AccessRule;
+import com.chexuan.dzpk.game.rules.AnteRule;
+import com.chexuan.dzpk.game.rules.InsuranceRule;
+import com.chexuan.dzpk.game.rules.MuckRule;
+import com.chexuan.dzpk.game.rules.SessionRule;
+import com.chexuan.dzpk.game.rules.StraddleRule;
 import com.chexuan.dzpk.ws.GameMessage;
 import com.chexuan.dzpk.ws.MsgType;
 import lombok.extern.slf4j.Slf4j;
@@ -111,6 +117,11 @@ public class DzGameService {
     }
 
     public void sitDown(long roomId, long userId, int seat) {
+        sitDown(roomId, userId, seat, null);
+    }
+
+    /** ip 用于 AccessRule 同 IP 限制(机器人/单测传 null 跳过) */
+    public void sitDown(long roomId, long userId, int seat, String ip) {
         DzRoom room = roomManager.get(roomId);
         if (room == null) {
             sendError(userId, roomId, "房间不存在");
@@ -129,11 +140,17 @@ public class DzGameService {
                 sendError(userId, roomId, "座位不可用");
                 return;
             }
+            String deny = AccessRule.checkSit(room, ip);
+            if (deny != null) {
+                sendError(userId, roomId, deny);
+                return;
+            }
             DzPlayer p = new DzPlayer();
             p.setUserId(userId);
             p.setNickname(room.getMembers().get(userId));
             p.setSeat(seat);
             p.setStack(0);
+            p.setIp(ip);
             room.getSeats()[seat] = p;
             broadcaster.toRoom(roomId, GameMessage.create(MsgType.PLAYER_SIT, roomId,
                     Map.of("userId", userId, "nickname", p.getNickname(), "seat", seat,
@@ -206,6 +223,12 @@ public class DzGameService {
                 sendError(userId, roomId, "不在座位上");
                 return;
             }
+            // 最短上桌时间(SessionRule):未满不能站起
+            String deny = SessionRule.checkStandUp(room, p);
+            if (deny != null) {
+                sendError(userId, roomId, deny);
+                return;
+            }
             if (room.inGame() && p.isInHand() && !p.isFolded()) {
                 boolean first = !p.isPendingStandUp();
                 p.setPendingStandUp(true);
@@ -244,17 +267,23 @@ public class DzGameService {
     /** 人够且房间空闲就开下一手(坐下/带入/结算后都会来探一次) */
     private void tryStartHand(DzRoom room) {
         if (room.inGame() || room.isHandScheduled()) return;
-        if (room.readyPlayers().size() >= 2) {
+        if (room.readyPlayers().size() >= startNeed(room)) {
             room.setHandScheduled(true);
             roomWorker.submitDelaySecs(room.getRoomId(), () -> startHand(room), nextHandDelaySecs);
         }
+    }
+
+    /** 开局所需人数:首局按 autoStartNum(SessionRule),开起来之后 ≥2 就续 */
+    private int startNeed(DzRoom room) {
+        if (room.getHandNo() > 0) return 2;
+        return room.getRules() != null ? room.getRules().effectiveAutoStart() : 2;
     }
 
     private void startHand(DzRoom room) {
         room.setHandScheduled(false);
         if (room.inGame()) return;
         List<DzPlayer> ready = room.readyPlayers();
-        if (ready.size() < 2) {
+        if (ready.size() < startNeed(room)) {
             room.setStage(GameStage.WAITING);
             broadcaster.toRoom(room.getRoomId(), GameMessage.create(MsgType.ROOM_STATE, room.getRoomId(),
                     Map.of("stage", GameStage.WAITING.name())));
@@ -266,6 +295,8 @@ public class DzGameService {
         room.setPots(new ArrayList<>());
         room.setCollectedPot(0);
         room.getDeadContributions().clear();
+        cancelInsurance(room);
+        room.setInsurance(null);
         room.setDeck(new Deck());
 
         for (DzPlayer p : room.getSeats()) {
@@ -286,11 +317,17 @@ public class DzGameService {
         room.setSbSeat(sbSeat);
         room.setBbSeat(bbSeat);
 
+        // 前注(AnteRule):发盲注前每人强投,直接进池
+        long anteTotal = AnteRule.post(room, ready);
+
         // 盲注
         pay(room.playerAtSeat(sbSeat), room.getSb());
         pay(room.playerAtSeat(bbSeat), room.getBb());
         room.setCurrentBet(room.getBb());
         room.setMinRaise(room.getBb());
+
+        // 抓头(StraddleRule):BB 下家强制 2BB,翻前行动从其下家开始
+        int straddleSeat = StraddleRule.post(room, this::pay);
 
         // 发手牌
         for (DzPlayer p : ready) {
@@ -298,18 +335,26 @@ public class DzGameService {
         }
 
         room.setStage(GameStage.PREFLOP);
-        broadcaster.toRoom(room.getRoomId(), GameMessage.create(MsgType.HAND_START, room.getRoomId(), Map.of(
-                "handNo", room.getHandNo(),
-                "button", button, "sbSeat", sbSeat, "bbSeat", bbSeat,
-                "sb", room.getSb(), "bb", room.getBb(),
-                "players", seatBrief(room))));
+        Map<String, Object> startData = new LinkedHashMap<>();
+        startData.put("handNo", room.getHandNo());
+        startData.put("button", button);
+        startData.put("sbSeat", sbSeat);
+        startData.put("bbSeat", bbSeat);
+        startData.put("sb", room.getSb());
+        startData.put("bb", room.getBb());
+        startData.put("ante", anteTotal > 0 ? (room.getRules() != null ? room.getRules().getAnte() : 0) : 0);
+        startData.put("straddleSeat", straddleSeat);
+        startData.put("pot", room.displayPot());
+        startData.put("players", seatBrief(room));
+        broadcaster.toRoom(room.getRoomId(), GameMessage.create(MsgType.HAND_START, room.getRoomId(), startData));
         for (DzPlayer p : ready) {
             broadcaster.toUser(p.getUserId(), GameMessage.create(MsgType.HOLE_CARDS, room.getRoomId(), Map.of(
                     "handNo", room.getHandNo(),
                     "cards", cardStrs(p.getHoleCards()))));
         }
 
-        int first = room.nextSeat(bbSeat, DzPlayer::canAct);
+        int lastBlindSeat = straddleSeat != -1 ? straddleSeat : bbSeat;
+        int first = room.nextSeat(lastBlindSeat, DzPlayer::canAct);
         if (first == -1) {
             // 盲注就全下光了 → 直接跑马
             advanceStreet(room);
@@ -392,6 +437,12 @@ public class DzGameService {
             }
         }
         p.setActed(true);
+        // 入池率统计(vpOn):翻前主动投入(跟注/加注/全下)记一次入池
+        if (room.getStage() == GameStage.PREFLOP && !p.isVpipThisHand()
+                && (act == ActionType.CALL || act == ActionType.RAISE || act == ActionType.ALLIN)) {
+            p.setVpipThisHand(true);
+            p.setVpipCount(p.getVpipCount() + 1);
+        }
         cancelActionTimeout(room);
 
         broadcaster.toRoom(room.getRoomId(), GameMessage.create(MsgType.ACTION_BC, room.getRoomId(), Map.of(
@@ -419,16 +470,25 @@ public class DzGameService {
         }
     }
 
+    /** 行动思考时间:建房参数 opTimeSec 优先,没配走全局默认 */
+    private int actionSecs(DzRoom room) {
+        if (room.getRules() != null && room.getRules().getOpTimeSec() > 0) {
+            return room.getRules().getOpTimeSec();
+        }
+        return actionTimeoutSecs;
+    }
+
     private void setActing(DzRoom room, int seat) {
         room.setActingSeat(seat);
         DzPlayer p = room.playerAtSeat(seat);
-        long deadline = System.currentTimeMillis() + actionTimeoutSecs * 1000L;
+        int secs = actionSecs(room);
+        long deadline = System.currentTimeMillis() + secs * 1000L;
         room.setActionDeadline(deadline);
         broadcaster.toRoom(room.getRoomId(), GameMessage.create(MsgType.TURN, room.getRoomId(), Map.of(
                 "seat", seat, "userId", p.getUserId(),
                 "toCall", Math.max(0, room.getCurrentBet() - p.getBetThisRound()),
                 "minRaiseTo", room.getCurrentBet() + room.getMinRaise(),
-                "deadline", deadline, "timeoutSecs", actionTimeoutSecs)));
+                "deadline", deadline, "timeoutSecs", secs)));
         scheduleActionTimeout(room, seat);
     }
 
@@ -446,7 +506,7 @@ public class DzGameService {
             boolean canCheck = room.getCurrentBet() == p.getBetThisRound();
             log.info("行动超时自动{}: roomId={}, userId={}", canCheck ? "过牌" : "弃牌", room.getRoomId(), p.getUserId());
             handleAction(room, p.getUserId(), canCheck ? ActionType.CHECK : ActionType.FOLD, 0, true);
-        }, actionTimeoutSecs);
+        }, actionSecs(room));
         room.setActionTimeout(f);
     }
 
@@ -479,6 +539,10 @@ public class DzGameService {
             showdown(room);
             return;
         }
+        // 保险(InsuranceRule):发河牌前,两人全下跑马 → 给领先方报价,拿到决定再发
+        if (cur == GameStage.TURN && tryOfferInsurance(room)) {
+            return;
+        }
         int dealCount = (cur == GameStage.PREFLOP) ? 3 : 1;
         for (int i = 0; i < dealCount; i++) {
             room.getBoard().add(room.getDeck().deal());
@@ -505,9 +569,126 @@ public class DzGameService {
         }
     }
 
+    // ================================================================
+    // 保险(河牌保险,规则细节在 InsuranceRule)
+    // ================================================================
+
+    @Value("${dzpk.insurance-timeout-secs:12}")
+    private int insuranceTimeoutSecs;
+
+    /** 尝试报价。true=已挂起等领先方决定(advanceStreet 暂停),false=不满足条件继续发牌 */
+    private boolean tryOfferInsurance(DzRoom room) {
+        InsuranceRule.State st = room.getInsurance();
+        if (st != null && st.handNo == room.getHandNo()) {
+            return st.pending();  // 已决定过(买/放弃/超时)→ 不再报价
+        }
+        InsuranceRule.Offer offer = InsuranceRule.tryOffer(room);
+        if (offer == null) return false;
+
+        st = new InsuranceRule.State();
+        st.handNo = room.getHandNo();
+        st.offer = offer;
+        st.deadline = System.currentTimeMillis() + insuranceTimeoutSecs * 1000L;
+        room.setInsurance(st);
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("leaderUserId", offer.leaderUserId);
+        data.put("outs", offer.outs);
+        data.put("outCards", offer.outCards);
+        data.put("oddsX100", offer.oddsX100);
+        data.put("maxInsure", offer.maxInsure);
+        data.put("deadline", st.deadline);
+        data.put("timeoutSecs", insuranceTimeoutSecs);
+        // 全房广播(前端:领先方弹购买面板,其他人显示"保险决策中")
+        broadcaster.toRoom(room.getRoomId(), GameMessage.create(MsgType.INSURANCE_OFFER, room.getRoomId(), data));
+        log.info("保险报价: roomId={}, handNo={}, leader={}, outs={}, odds={}, maxInsure={}",
+                room.getRoomId(), st.handNo, offer.leaderUserId, offer.outs, offer.oddsX100, offer.maxInsure);
+
+        long handNo = st.handNo;
+        ScheduledFuture<?> f = roomWorker.submitDelaySecs(room.getRoomId(), () -> {
+            InsuranceRule.State cur = room.getInsurance();
+            if (cur == null || cur.handNo != handNo || cur.decided) return;
+            decideInsurance(room, cur, 0);  // 超时=放弃
+        }, insuranceTimeoutSecs);
+        room.setInsuranceTimeout(f);
+        return true;
+    }
+
+    /** C→S 买保险(amount=0 放弃) */
+    public void insuranceBuy(long roomId, long userId, long amount) {
+        DzRoom room = roomManager.get(roomId);
+        if (room == null) return;
+        roomWorker.submit(roomId, () -> {
+            InsuranceRule.State st = room.getInsurance();
+            if (st == null || !st.pending() || st.handNo != room.getHandNo()) {
+                sendError(userId, roomId, "当前没有可购买的保险");
+                return;
+            }
+            if (st.offer.leaderUserId != userId) {
+                sendError(userId, roomId, "只有领先方可以购买保险");
+                return;
+            }
+            long insured = Math.max(0, Math.min(amount, st.offer.maxInsure));
+            decideInsurance(room, st, insured);
+        });
+    }
+
+    /** 落定保险决定并继续发河牌 */
+    private void decideInsurance(DzRoom room, InsuranceRule.State st, long insured) {
+        st.decided = true;
+        st.insured = insured;
+        st.premium = insured > 0 ? InsuranceRule.premium(insured, st.offer.outs) : 0;
+        cancelInsurance(room);
+        broadcaster.toRoom(room.getRoomId(), GameMessage.create(MsgType.INSURANCE_RESULT, room.getRoomId(), Map.of(
+                "phase", "decided",
+                "leaderUserId", st.offer.leaderUserId,
+                "insured", st.insured, "premium", st.premium, "outs", st.offer.outs)));
+        log.info("保险决定: roomId={}, leader={}, insured={}, premium={}",
+                room.getRoomId(), st.offer.leaderUserId, st.insured, st.premium);
+        advanceStreet(room);
+    }
+
+    /** 取消保险超时任务(不动 State) */
+    private void cancelInsurance(DzRoom room) {
+        if (room.getInsuranceTimeout() != null) {
+            room.getInsuranceTimeout().cancel(false);
+            room.setInsuranceTimeout(null);
+        }
+    }
+
+    /**
+     * 摊牌后套用保险(平台承保,不动底池):
+     *   河牌是 out(被反超)→ 赔付投保额;守住 → 扣保费(不超过桌上筹码)。
+     */
+    private void applyInsurance(DzRoom room) {
+        InsuranceRule.State st = room.getInsurance();
+        if (st == null || st.handNo != room.getHandNo() || st.insured <= 0) return;
+        DzPlayer leader = room.playerByUserId(st.offer.leaderUserId);
+        if (leader == null) return;
+        String river = room.getBoard().size() == 5 ? room.getBoard().get(4).toString() : "";
+        boolean outHit = st.offer.outCards.contains(river);
+        long delta;
+        if (outHit) {
+            delta = st.insured;
+        } else {
+            delta = -Math.min(st.premium, leader.getStack());
+        }
+        leader.setStack(leader.getStack() + delta);
+        leader.setNetWin(leader.getNetWin() + delta);
+        broadcaster.toRoom(room.getRoomId(), GameMessage.create(MsgType.INSURANCE_RESULT, room.getRoomId(), Map.of(
+                "phase", "settled",
+                "leaderUserId", leader.getUserId(),
+                "outHit", outHit, "river", river,
+                "insured", st.insured, "premium", st.premium, "delta", delta,
+                "stack", leader.getStack())));
+        log.info("保险结算: roomId={}, leader={}, outHit={}, delta={}",
+                room.getRoomId(), leader.getUserId(), outHit, delta);
+    }
+
     /** 只剩一家(其他全弃) — 不摊牌直接拿走 */
     private void winByFold(DzRoom room, DzPlayer winner) {
         cancelActionTimeout(room);
+        cancelInsurance(room);
         collectBets(room);
         room.setStage(GameStage.SETTLING);
         long total = room.getCollectedPot();
@@ -579,6 +760,7 @@ public class DzGameService {
                 w.setNetWin(w.getNetWin() + got);
                 winnerIds.add(w.getUserId());
             }
+            pot.getWinnerUserIds().addAll(winnerIds);
             potResults.add(Map.of("amount", pot.getAmount(), "winners", winnerIds));
         }
         // 净输赢 = 赢得 - 投入
@@ -587,11 +769,15 @@ public class DzGameService {
             p.setNetWin(p.getNetWin() - p.getTotalBetThisHand());
         }
 
+        // 保险结算(InsuranceRule):被反超赔付 / 守住扣保费
+        applyInsurance(room);
+
         room.setStage(GameStage.SETTLING);
         List<Map<String, Object>> results = new ArrayList<>();
         for (DzPlayer p : room.getSeats()) {
             if (p == null || !p.isInHand()) continue;
-            results.add(playerResult(p, p.contesting()));
+            // 埋牌(MuckRule):开着只亮赢家,关着摊牌都亮
+            results.add(playerResult(p, MuckRule.shouldShow(room, p, pots)));
         }
         broadcaster.toRoom(room.getRoomId(), GameMessage.create(MsgType.SETTLE, room.getRoomId(), Map.of(
                 "handNo", room.getHandNo(), "reason", "showdown",
@@ -623,6 +809,7 @@ public class DzGameService {
 
     private void finishHand(DzRoom room) {
         room.setStage(GameStage.FINISHED);
+        cancelInsurance(room);
         long roomId = room.getRoomId();
 
         // 每手战绩落库(参与者每人一行;局中先走的已由 doStandUp 单独补行)
@@ -883,6 +1070,16 @@ public class DzGameService {
         m.put("maxBuyin", room.getMaxBuyin());
         m.put("settleTimeMins", room.getSettleTimeMins());
         m.put("rakePercent", room.getRakePercent());
+        if (room.getRules() != null) {
+            m.put("rules", room.getRules().toMap());
+        }
+        InsuranceRule.State ins = room.getInsurance();
+        if (ins != null && ins.pending()) {
+            m.put("insurance", Map.of(
+                    "leaderUserId", ins.offer.leaderUserId,
+                    "outs", ins.offer.outs, "oddsX100", ins.offer.oddsX100,
+                    "maxInsure", ins.offer.maxInsure, "deadline", ins.deadline));
+        }
         m.put("stage", room.getStage().name());
         m.put("handNo", room.getHandNo());
         m.put("button", room.getButton());
@@ -907,6 +1104,10 @@ public class DzGameService {
             pm.put("awaitingBuyin", p.isAwaitingBuyin());
             pm.put("offline", p.isOffline());
             pm.put("effectiveSecs", p.effectiveMs() / 1000);
+            if (room.getRules() != null && room.getRules().isVpOn()) {
+                pm.put("vpip", p.getVpipCount());
+                pm.put("handCount", p.getHandCount());
+            }
             if (p.getUserId() == forUserId && p.getHoleCards() != null) {
                 pm.put("cards", cardStrs(p.getHoleCards()));
             }

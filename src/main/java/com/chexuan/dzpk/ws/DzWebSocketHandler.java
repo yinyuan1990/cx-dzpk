@@ -163,6 +163,9 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
                     m.put("bb", r.getBb());
                     m.put("maxPlayers", r.getMaxPlayers());
                     m.put("settleTimeMins", r.getSettleTimeMins());
+                    if (r.getRules() != null) {
+                        m.put("rules", r.getRules().toMap());
+                    }
                     int seated = 0;
                     for (var p : r.getSeats()) if (p != null) seated++;
                     m.put("seated", seated);
@@ -174,21 +177,16 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
                 send(session, res);
             }
             case MsgType.CREATE_ROOM -> {
-                long sb = lng(data, "sb", 1);
-                long bb = lng(data, "bb", sb * 2);
-                int maxPlayers = (int) lng(data, "maxPlayers", 9);
-                int settleTimeMins = (int) lng(data, "settleTimeMins", 30);
-                int rakePercent = (int) lng(data, "rakePercent", 5);
-                String name = str(data, "name");
-                if (name == null || name.isBlank()) name = nickname + "的牌局";
-                if (sb <= 0 || bb < sb || maxPlayers < 2 || maxPlayers > 9
-                        || settleTimeMins < 0 || rakePercent < 0 || rakePercent > 20) {
-                    send(session, err(msg, "创建参数非法"));
+                // 全量参数解析+校验在 RoomRules(对齐老德州建房参数)
+                com.chexuan.dzpk.game.rules.RoomRules rules;
+                try {
+                    rules = com.chexuan.dzpk.game.rules.RoomRules.parse(data, nickname + "的牌局");
+                } catch (IllegalArgumentException e) {
+                    send(session, err(msg, e.getMessage()));
                     return;
                 }
                 // 俱乐部房:仅群主/管理员可建(对齐扯旋)
-                long clubId = lng(data, "clubId", 0);
-                if (clubId > 0 && !clubService.canCreateRoom(clubId, userId)) {
+                if (rules.getClubId() > 0 && !clubService.canCreateRoom(rules.getClubId(), userId)) {
                     send(session, err(msg, "需要群主/管理员权限才能创建俱乐部牌局"));
                     return;
                 }
@@ -201,26 +199,20 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
                     }
                     cost = createRoomDiamondCost;
                 }
-                DzRoom room = roomManager.create(name, userId, sb, bb, maxPlayers, settleTimeMins, rakePercent, clubId);
+                DzRoom room = roomManager.create(rules, userId);
                 records.saveRoomCreated(room, cost);
-                Map<String, Object> resData = new LinkedHashMap<>();
+                Map<String, Object> resData = new LinkedHashMap<>(rules.toMap());
                 resData.put("roomId", room.getRoomId());
-                resData.put("name", room.getName());
-                resData.put("clubId", clubId);
-                resData.put("sb", sb);
-                resData.put("bb", bb);
-                resData.put("maxPlayers", maxPlayers);
-                resData.put("settleTimeMins", settleTimeMins);
-                resData.put("rakePercent", rakePercent);
-                resData.put("minBuyin", room.getMinBuyin());
-                resData.put("maxBuyin", room.getMaxBuyin());
                 resData.put("diamondCost", cost);
                 resData.put("diamond", diamondService.balance(userId));
                 GameMessage res = GameMessage.create(MsgType.CREATE_ROOM_RES, room.getRoomId(), resData);
                 res.setSequence(msg.getSequence());
                 send(session, res);
-                log.info("创建房间: roomId={}, name={}, sb/bb={}/{}, settle={}min, rake={}%, 钻石={}",
-                        room.getRoomId(), name, sb, bb, settleTimeMins, rakePercent, cost);
+                log.info("创建房间: roomId={}, name={}, sb/bb={}/{}, 人数={}, settle={}min, rake={}%, " +
+                                "ante={}, straddle={}, 保险={}, muck={}, 钻石={}",
+                        room.getRoomId(), rules.getName(), rules.getSb(), rules.bb(), rules.getMaxPlayers(),
+                        rules.getSettleTimeMins(), rules.getRakePercent(),
+                        rules.getAnte(), rules.isStraddleOn(), rules.isInsuranceOn(), rules.isMuckOn(), cost);
             }
             case MsgType.ENTER_ROOM -> {
                 DzRoom r = roomManager.get(roomId);
@@ -231,10 +223,11 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
                 gameService.enterRoom(roomId, userId, nickname);
             }
             case MsgType.LEAVE_ROOM -> gameService.leaveRoom(roomId, userId);
-            case MsgType.SIT_DOWN -> gameService.sitDown(roomId, userId, (int) lng(data, "seat", -1));
+            case MsgType.SIT_DOWN -> gameService.sitDown(roomId, userId, (int) lng(data, "seat", -1), clientIp(session));
             case MsgType.BUY_IN -> gameService.buyIn(roomId, userId, lng(data, "amount", 0));
             case MsgType.STAND_UP -> gameService.standUp(roomId, userId);
             case MsgType.ACTION -> gameService.action(roomId, userId, str(data, "act"), lng(data, "amount", 0));
+            case MsgType.INSURANCE_BUY -> gameService.insuranceBuy(roomId, userId, lng(data, "amount", 0));
             case MsgType.SNAPSHOT -> gameService.snapshotTo(roomId, userId);
             case MsgType.MY_RECORDS -> {
                 int limit = (int) lng(data, "limit", 20);
@@ -336,6 +329,20 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
                     Map.of("clubId", clubId, "clubName", clubService.clubName(clubId), "approve", approve)));
         } catch (Exception e) {
             log.warn("审批通知失败: userId={}, {}", userId, e.getMessage());
+        }
+    }
+
+    /** 客户端 IP(AccessRule 同 IP 限制用;有反代时优先握手头 X-Forwarded-For) */
+    private String clientIp(WebSocketSession session) {
+        try {
+            String fwd = session.getHandshakeHeaders().getFirst("X-Forwarded-For");
+            if (fwd != null && !fwd.isBlank()) {
+                return fwd.split(",")[0].trim();
+            }
+            return session.getRemoteAddress() != null
+                    ? session.getRemoteAddress().getAddress().getHostAddress() : null;
+        } catch (Exception e) {
+            return null;
         }
     }
 

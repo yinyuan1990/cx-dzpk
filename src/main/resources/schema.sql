@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS dz_room (
     settle_time_mins INT         NOT NULL DEFAULT 0,
     rake_percent    INT          NOT NULL DEFAULT 0,
     diamond_cost    BIGINT       NOT NULL DEFAULT 0,
+    rules_json      VARCHAR(2048) NOT NULL DEFAULT '',
     created_at      DATETIME     NOT NULL,
     closed_at       DATETIME     NULL
 );
@@ -176,3 +177,4 @@ CREATE TABLE IF NOT EXISTS `user` (
 -- 增量迁移(表已存在时补列;重复执行报错由 continue-on-error 忽略)
 -- ============================================================
 ALTER TABLE dz_room ADD COLUMN club_id BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE dz_room ADD COLUMN rules_json VARCHAR(2048) NOT NULL DEFAULT '';

@@ -1,6 +1,7 @@
 package com.chexuan.dzpk.game.service;
 
 import com.chexuan.dzpk.game.model.DzRoom;
+import com.chexuan.dzpk.game.rules.RoomRules;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -17,30 +18,48 @@ public class DzRoomManager {
 
     private final Map<Long, DzRoom> rooms = new ConcurrentHashMap<>();
 
-    public DzRoom create(String name, long creatorUserId, long sb, long bb,
-                         int maxPlayers, int settleTimeMins, int rakePercent) {
-        return create(name, creatorUserId, sb, bb, maxPlayers, settleTimeMins, rakePercent, 0);
-    }
-
-    public DzRoom create(String name, long creatorUserId, long sb, long bb,
-                         int maxPlayers, int settleTimeMins, int rakePercent, long clubId) {
+    /** 完整规则建房(正式入口) */
+    public DzRoom create(RoomRules rules, long creatorUserId) {
         long roomId;
         do {
             roomId = ThreadLocalRandom.current().nextLong(100000, 1000000);
         } while (rooms.containsKey(roomId));
 
-        DzRoom room = new DzRoom(maxPlayers);
+        DzRoom room = new DzRoom(rules.getMaxPlayers());
         room.setRoomId(roomId);
-        room.setName(name);
         room.setCreatorUserId(creatorUserId);
-        room.setClubId(clubId);
-        room.setSb(sb);
-        room.setBb(bb);
+        room.setRules(rules);
+        // 镜像字段:老代码继续读这些
+        room.setName(rules.getName());
+        room.setClubId(rules.getClubId());
+        room.setSb(rules.getSb());
+        room.setBb(rules.bb());
+        room.setMinBuyin(rules.minBuyin());
+        room.setMaxBuyin(rules.maxBuyin());
+        room.setSettleTimeMins(rules.getSettleTimeMins());
+        room.setRakePercent(rules.getRakePercent());
+        rooms.put(roomId, room);
+        return room;
+    }
+
+    /** 兼容旧签名(单测用):按老默认带入 40~400BB */
+    public DzRoom create(String name, long creatorUserId, long sb, long bb,
+                         int maxPlayers, int settleTimeMins, int rakePercent) {
+        return create(name, creatorUserId, sb, bb, maxPlayers, settleTimeMins, rakePercent, 0);
+    }
+
+    /** 兼容旧签名(单测用) */
+    public DzRoom create(String name, long creatorUserId, long sb, long bb,
+                         int maxPlayers, int settleTimeMins, int rakePercent, long clubId) {
+        RoomRules rules = RoomRules.legacy(name, sb, bb, maxPlayers, settleTimeMins, rakePercent);
+        rules.setClubId(clubId);
+        DzRoom room = create(rules, creatorUserId);
+        // 老测试的带入范围沿用旧默认(bb*40 ~ bb*400)
         room.setMinBuyin(bb * 40);
         room.setMaxBuyin(bb * 400);
-        room.setSettleTimeMins(settleTimeMins);
-        room.setRakePercent(rakePercent);
-        rooms.put(roomId, room);
+        rules.setInChip(bb * 40);
+        rules.setInMinRate(1);
+        rules.setInMaxRate(10);
         return room;
     }
 

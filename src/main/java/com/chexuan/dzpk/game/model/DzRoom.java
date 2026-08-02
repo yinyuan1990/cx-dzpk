@@ -45,6 +45,18 @@ public class DzRoom {
     /** 抽水比例(%),周期结算时对盈利部分抽取 */
     private int rakePercent;
 
+    /**
+     * 完整建房规则(前注/抓头/保险/埋牌/IP限制…)。
+     * sb/bb/maxPlayers/minBuyin/maxBuyin/settleTimeMins/rakePercent 是它的镜像,
+     * 创建时一次性同步,老代码继续读镜像字段。
+     */
+    private com.chexuan.dzpk.game.rules.RoomRules rules;
+
+    /** 本手保险状态(河牌保险,一手一份,开新手时清) */
+    private com.chexuan.dzpk.game.rules.InsuranceRule.State insurance;
+    /** 保险决策超时任务 */
+    private ScheduledFuture<?> insuranceTimeout;
+
     /** 座位 → 玩家(座位号 0..maxPlayers-1) */
     private final DzPlayer[] seats;
 

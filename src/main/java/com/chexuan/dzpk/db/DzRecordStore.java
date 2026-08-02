@@ -36,11 +36,20 @@ public class DzRecordStore {
     public void saveRoomCreated(DzRoom room, long diamondCost) {
         if (jdbc == null) return;
         try {
+            String rulesJson = "";
+            if (room.getRules() != null) {
+                try {
+                    rulesJson = new com.fasterxml.jackson.databind.ObjectMapper()
+                            .writeValueAsString(room.getRules().toMap());
+                } catch (Exception ignored) {
+                }
+            }
             jdbc.update("INSERT INTO dz_room (room_id, name, club_id, creator_user_id, sb, bb, max_players, " +
-                            "settle_time_mins, rake_percent, diamond_cost, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                            "settle_time_mins, rake_percent, diamond_cost, rules_json, created_at) " +
+                            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                     room.getRoomId(), room.getName(), room.getClubId(), room.getCreatorUserId(), room.getSb(),
                     room.getBb(), room.getMaxPlayers(), room.getSettleTimeMins(), room.getRakePercent(),
-                    diamondCost, now());
+                    diamondCost, rulesJson, now());
         } catch (Exception e) {
             log.error("dz_room 写入失败: roomId={}", room.getRoomId(), e);
         }
