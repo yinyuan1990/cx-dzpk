@@ -1,6 +1,7 @@
 package com.chexuan.dzpk.ws;
 
 import com.chexuan.dzpk.auth.JwtVerifier;
+import com.chexuan.dzpk.club.DzClubService;
 import com.chexuan.dzpk.db.DiamondService;
 import com.chexuan.dzpk.db.DzRecordStore;
 import com.chexuan.dzpk.game.model.DzRoom;
@@ -45,6 +46,7 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
     private final WalletService walletService;
     private final DiamondService diamondService;
     private final DzRecordStore records;
+    private final DzClubService clubService;
 
     @Value("${dzpk.allow-guest:false}")
     private boolean allowGuest;
@@ -56,7 +58,8 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
     public DzWebSocketHandler(ObjectMapper objectMapper, JwtVerifier jwtVerifier,
                               WsSessionRegistry registry, DzGameService gameService,
                               DzRoomManager roomManager, WalletService walletService,
-                              DiamondService diamondService, DzRecordStore records) {
+                              DiamondService diamondService, DzRecordStore records,
+                              DzClubService clubService) {
         this.objectMapper = objectMapper;
         this.jwtVerifier = jwtVerifier;
         this.registry = registry;
@@ -65,6 +68,7 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
         this.walletService = walletService;
         this.diamondService = diamondService;
         this.records = records;
+        this.clubService = clubService;
     }
 
     @Override
@@ -92,6 +96,8 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
                 return;
             }
             dispatch(session, userId, msg);
+        } catch (DzClubService.ClubException e) {
+            send(session, err(msg, e.getMessage()));
         } catch (Exception e) {
             log.error("消息处理异常: type={}", msg.getType(), e);
             send(session, err(msg, "服务器内部错误"));
@@ -140,11 +146,19 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
 
         switch (msg.getType()) {
             case MsgType.ROOM_LIST -> {
+                // clubId=0 公开房;clubId>0 该俱乐部的房间(须是成员)
+                long clubId = lng(data, "clubId", 0);
+                if (clubId > 0 && !clubService.isMember(clubId, userId)) {
+                    send(session, err(msg, "不是俱乐部成员"));
+                    return;
+                }
                 List<Map<String, Object>> list = new ArrayList<>();
                 for (DzRoom r : roomManager.list()) {
+                    if (r.getClubId() != clubId) continue;
                     Map<String, Object> m = new LinkedHashMap<>();
                     m.put("roomId", r.getRoomId());
                     m.put("name", r.getName());
+                    m.put("clubId", r.getClubId());
                     m.put("sb", r.getSb());
                     m.put("bb", r.getBb());
                     m.put("maxPlayers", r.getMaxPlayers());
@@ -172,6 +186,12 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
                     send(session, err(msg, "创建参数非法"));
                     return;
                 }
+                // 俱乐部房:仅群主/管理员可建(对齐扯旋)
+                long clubId = lng(data, "clubId", 0);
+                if (clubId > 0 && !clubService.canCreateRoom(clubId, userId)) {
+                    send(session, err(msg, "需要群主/管理员权限才能创建俱乐部牌局"));
+                    return;
+                }
                 // 建房扣钻石(公用货币,主库 user.diamond;游客/机器人无主服账号跳过)
                 long cost = 0;
                 if (createRoomDiamondCost > 0 && diamondService.hasMainAccount(userId)) {
@@ -181,11 +201,12 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
                     }
                     cost = createRoomDiamondCost;
                 }
-                DzRoom room = roomManager.create(name, userId, sb, bb, maxPlayers, settleTimeMins, rakePercent);
+                DzRoom room = roomManager.create(name, userId, sb, bb, maxPlayers, settleTimeMins, rakePercent, clubId);
                 records.saveRoomCreated(room, cost);
                 Map<String, Object> resData = new LinkedHashMap<>();
                 resData.put("roomId", room.getRoomId());
                 resData.put("name", room.getName());
+                resData.put("clubId", clubId);
                 resData.put("sb", sb);
                 resData.put("bb", bb);
                 resData.put("maxPlayers", maxPlayers);
@@ -201,7 +222,14 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
                 log.info("创建房间: roomId={}, name={}, sb/bb={}/{}, settle={}min, rake={}%, 钻石={}",
                         room.getRoomId(), name, sb, bb, settleTimeMins, rakePercent, cost);
             }
-            case MsgType.ENTER_ROOM -> gameService.enterRoom(roomId, userId, nickname);
+            case MsgType.ENTER_ROOM -> {
+                DzRoom r = roomManager.get(roomId);
+                if (r != null && r.getClubId() > 0 && !clubService.isMember(r.getClubId(), userId)) {
+                    send(session, err(msg, "俱乐部牌局,仅成员可进"));
+                    return;
+                }
+                gameService.enterRoom(roomId, userId, nickname);
+            }
             case MsgType.LEAVE_ROOM -> gameService.leaveRoom(roomId, userId);
             case MsgType.SIT_DOWN -> gameService.sitDown(roomId, userId, (int) lng(data, "seat", -1));
             case MsgType.BUY_IN -> gameService.buyIn(roomId, userId, lng(data, "amount", 0));
@@ -215,6 +243,43 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
                         "stats", records.myStats(userId)));
                 res.setSequence(msg.getSequence());
                 send(session, res);
+            }
+            // ==================== 俱乐部 ====================
+            case MsgType.CLUB_CREATE -> reply(session, msg, MsgType.CLUB_CREATE_RES,
+                    clubService.createClub(userId, nickname, str(data, "name"), str(data, "notice")));
+            case MsgType.CLUB_LIST -> reply(session, msg, MsgType.CLUB_LIST_RES,
+                    Map.of("clubs", clubService.myClubs(userId)));
+            case MsgType.CLUB_APPLY -> reply(session, msg, MsgType.CLUB_APPLY_RES,
+                    clubService.apply(userId, nickname, lng(data, "code", 0)));
+            case MsgType.CLUB_APPLY_LIST -> reply(session, msg, MsgType.CLUB_APPLY_LIST_RES,
+                    Map.of("requests", clubService.applyList(lng(data, "clubId", 0), userId)));
+            case MsgType.CLUB_REVIEW -> {
+                long clubId = lng(data, "clubId", 0);
+                boolean approve = Boolean.TRUE.equals(data.get("approve")) || lng(data, "approve", 0) == 1;
+                long applicant = clubService.review(clubId, userId, lng(data, "requestId", 0), approve);
+                reply(session, msg, MsgType.CLUB_REVIEW_RES,
+                        Map.of("requestId", lng(data, "requestId", 0), "approve", approve, "userId", applicant));
+                // 推送审批结果给申请人(在线才收得到)
+                notifyUser(applicant, clubId, approve);
+            }
+            case MsgType.CLUB_MEMBERS -> reply(session, msg, MsgType.CLUB_MEMBERS_RES,
+                    Map.of("members", clubService.members(lng(data, "clubId", 0), userId)));
+            case MsgType.CLUB_SET_ROLE -> {
+                clubService.setRole(lng(data, "clubId", 0), userId, lng(data, "userId", 0),
+                        (int) lng(data, "role", 1), (int) lng(data, "partnerRate", 0));
+                reply(session, msg, MsgType.CLUB_OP_RES, Map.of("op", "setRole"));
+            }
+            case MsgType.CLUB_KICK -> {
+                clubService.kick(lng(data, "clubId", 0), userId, lng(data, "userId", 0));
+                reply(session, msg, MsgType.CLUB_OP_RES, Map.of("op", "kick"));
+            }
+            case MsgType.CLUB_QUIT -> {
+                clubService.quit(lng(data, "clubId", 0), userId);
+                reply(session, msg, MsgType.CLUB_OP_RES, Map.of("op", "quit"));
+            }
+            case MsgType.CLUB_DISSOLVE -> {
+                clubService.dissolve(lng(data, "clubId", 0), userId);
+                reply(session, msg, MsgType.CLUB_OP_RES, Map.of("op", "dissolve"));
             }
             default -> send(session, err(msg, "未知命令 " + msg.getType()));
         }
@@ -255,6 +320,23 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
             }
         }
         return def;
+    }
+
+    /** 带 sequence 的成功应答 */
+    private void reply(WebSocketSession session, GameMessage req, int type, Map<String, Object> data) {
+        GameMessage res = GameMessage.create(type, null, data);
+        res.setSequence(req.getSequence());
+        send(session, res);
+    }
+
+    /** 审批结果推送给申请人 */
+    private void notifyUser(long userId, long clubId, boolean approve) {
+        try {
+            registry.toUser(userId, GameMessage.create(MsgType.CLUB_NOTIFY, null,
+                    Map.of("clubId", clubId, "clubName", clubService.clubName(clubId), "approve", approve)));
+        } catch (Exception e) {
+            log.warn("审批通知失败: userId={}, {}", userId, e.getMessage());
+        }
     }
 
     private GameMessage err(GameMessage req, String text) {

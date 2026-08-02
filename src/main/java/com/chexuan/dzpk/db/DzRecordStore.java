@@ -36,10 +36,11 @@ public class DzRecordStore {
     public void saveRoomCreated(DzRoom room, long diamondCost) {
         if (jdbc == null) return;
         try {
-            jdbc.update("INSERT INTO dz_room (room_id, name, creator_user_id, sb, bb, max_players, " +
-                            "settle_time_mins, rake_percent, diamond_cost, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
-                    room.getRoomId(), room.getName(), room.getCreatorUserId(), room.getSb(), room.getBb(),
-                    room.getMaxPlayers(), room.getSettleTimeMins(), room.getRakePercent(), diamondCost, now());
+            jdbc.update("INSERT INTO dz_room (room_id, name, club_id, creator_user_id, sb, bb, max_players, " +
+                            "settle_time_mins, rake_percent, diamond_cost, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                    room.getRoomId(), room.getName(), room.getClubId(), room.getCreatorUserId(), room.getSb(),
+                    room.getBb(), room.getMaxPlayers(), room.getSettleTimeMins(), room.getRakePercent(),
+                    diamondCost, now());
         } catch (Exception e) {
             log.error("dz_room 写入失败: roomId={}", room.getRoomId(), e);
         }

@@ -58,6 +58,10 @@ dzpk:
   # 钻石所在的用户表(钻石公用核心):开发 H2 用本库最小 user 表;
   # 生产配 chexuan_game.user 跨库直达主服钻石。
   diamond-user-table: "`user`"
+  # 创建俱乐部扣钻石(扯旋普通俱乐部 200 钻);0=不扣
+  create-club-diamond-cost: 0
+  # 每人最多创建俱乐部数(对齐扯旋默认 10)
+  max-club-per-user: 10
 
 logging:
   level:

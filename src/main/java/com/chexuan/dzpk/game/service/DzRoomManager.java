@@ -19,6 +19,11 @@ public class DzRoomManager {
 
     public DzRoom create(String name, long creatorUserId, long sb, long bb,
                          int maxPlayers, int settleTimeMins, int rakePercent) {
+        return create(name, creatorUserId, sb, bb, maxPlayers, settleTimeMins, rakePercent, 0);
+    }
+
+    public DzRoom create(String name, long creatorUserId, long sb, long bb,
+                         int maxPlayers, int settleTimeMins, int rakePercent, long clubId) {
         long roomId;
         do {
             roomId = ThreadLocalRandom.current().nextLong(100000, 1000000);
@@ -28,6 +33,7 @@ public class DzRoomManager {
         room.setRoomId(roomId);
         room.setName(name);
         room.setCreatorUserId(creatorUserId);
+        room.setClubId(clubId);
         room.setSb(sb);
         room.setBb(bb);
         room.setMinBuyin(bb * 40);

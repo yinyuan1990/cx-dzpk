@@ -22,6 +22,18 @@ public final class MsgType {
     public static final int SNAPSHOT = 410;
     public static final int MY_RECORDS = 411;   // 我的战绩 {limit?}
 
+    // -------- 俱乐部(42x) --------
+    public static final int CLUB_CREATE = 420;      // {name, notice?}
+    public static final int CLUB_LIST = 421;        // 我的俱乐部列表
+    public static final int CLUB_APPLY = 422;       // {code} 俱乐部号或邀请码
+    public static final int CLUB_APPLY_LIST = 423;  // {clubId} 待审批(群主/管理员)
+    public static final int CLUB_REVIEW = 424;      // {clubId, requestId, approve}
+    public static final int CLUB_MEMBERS = 425;     // {clubId}
+    public static final int CLUB_SET_ROLE = 426;    // {clubId, userId, role, partnerRate?}
+    public static final int CLUB_KICK = 427;        // {clubId, userId}
+    public static final int CLUB_QUIT = 428;        // {clubId}
+    public static final int CLUB_DISSOLVE = 429;    // {clubId}
+
     // ==================== S → C ====================
     public static final int LOGIN_RES = 451;
     public static final int ROOM_LIST_RES = 452;
@@ -44,6 +56,16 @@ public final class MsgType {
     public static final int ROOM_STATE = 469;       // WAITING/FINISHED 等房态变化
     public static final int STAND_UP_RES = 470;     // 站起回执 {pending:牌局中申请,本手结束生效}
     public static final int MY_RECORDS_RES = 471;   // {records:[...], stats:{...}}
+
+    // -------- 俱乐部(48x) --------
+    public static final int CLUB_CREATE_RES = 480;
+    public static final int CLUB_LIST_RES = 481;
+    public static final int CLUB_APPLY_RES = 482;
+    public static final int CLUB_APPLY_LIST_RES = 483;
+    public static final int CLUB_REVIEW_RES = 484;
+    public static final int CLUB_MEMBERS_RES = 485;
+    public static final int CLUB_OP_RES = 486;      // 设角色/踢人/退出/解散 通用回执 {op}
+    public static final int CLUB_NOTIFY = 487;      // 推送:审批结果 {clubId, clubName, approve}
 
     public static final int ERROR = 499;
 }

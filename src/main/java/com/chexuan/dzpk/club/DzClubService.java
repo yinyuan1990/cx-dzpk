@@ -1,0 +1,516 @@
+package com.chexuan.dzpk.club;
+
+import com.chexuan.dzpk.db.DiamondService;
+import com.chexuan.dzpk.game.service.WalletService;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Service;
+
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ThreadLocalRandom;
+
+/**
+ * 德州独立俱乐部(规则对齐扯旋):
+ *   创建(6位编号,扣公用钻石) / 申请加入(码先当俱乐部号再当邀请码) / 群主管理员审批 /
+ *   角色 1成员 2管理员 3创建者 4合伙人 / 推荐树(parent_user_id) /
+ *   合伙人分成:抽水沿链自上而下按 partner_rate 多层让利。
+ * 业务异常统一抛 ClubException(msg 直接回给前端)。
+ */
+@Slf4j
+@Service
+public class DzClubService {
+
+    public static final int ROLE_MEMBER = 1;
+    public static final int ROLE_ADMIN = 2;
+    public static final int ROLE_OWNER = 3;
+    public static final int ROLE_PARTNER = 4;
+
+    public static class ClubException extends RuntimeException {
+        public ClubException(String msg) {
+            super(msg);
+        }
+    }
+
+    private final JdbcTemplate jdbc;
+    private final DiamondService diamondService;
+    private final WalletService walletService;
+
+    /** 创建俱乐部扣钻石(公用钻石,主库 user.diamond);0=不扣。扯旋普通俱乐部 200 钻 */
+    @Value("${dzpk.create-club-diamond-cost:0}")
+    private long createClubDiamondCost;
+
+    /** 每人最多创建俱乐部数(对齐扯旋默认 10) */
+    @Value("${dzpk.max-club-per-user:10}")
+    private int maxClubPerUser;
+
+    public DzClubService(JdbcTemplate jdbc, DiamondService diamondService, WalletService walletService) {
+        this.jdbc = jdbc;
+        this.diamondService = diamondService;
+        this.walletService = walletService;
+    }
+
+    private void requireDb() {
+        if (jdbc == null) throw new ClubException("俱乐部服务未启用");
+    }
+
+    private static Timestamp now() {
+        return new Timestamp(System.currentTimeMillis());
+    }
+
+    // ================================================================
+    // 创建
+    // ================================================================
+
+    /** 创建俱乐部,返回 {clubId, clubNo, name, myInviteCode} */
+    public Map<String, Object> createClub(long userId, String nickname, String name, String notice) {
+        requireDb();
+        if (name == null || name.isBlank()) throw new ClubException("俱乐部名称不能为空");
+        if (name.length() > 16) throw new ClubException("俱乐部名称过长");
+        Integer cnt = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM dz_club WHERE creator_user_id = ? AND state <> 2", Integer.class, userId);
+        if (cnt != null && cnt >= maxClubPerUser) throw new ClubException("最多创建 " + maxClubPerUser + " 个俱乐部");
+
+        long cost = 0;
+        if (createClubDiamondCost > 0 && diamondService.hasMainAccount(userId)) {
+            if (!diamondService.debit(userId, createClubDiamondCost, "create_club", "德州创建俱乐部")) {
+                throw new ClubException("钻石不足,创建俱乐部需要 " + createClubDiamondCost + " 钻石");
+            }
+            cost = createClubDiamondCost;
+        }
+
+        long clubNo = uniqueNo("SELECT COUNT(*) FROM dz_club WHERE club_no = ? AND state <> 2");
+        jdbc.update("INSERT INTO dz_club (club_no, name, notice, creator_user_id, state, diamond_cost, created_at) " +
+                        "VALUES (?,?,?,?,1,?,?)",
+                clubNo, name.trim(), notice == null ? "" : notice, userId, cost, now());
+        Long clubId = jdbc.queryForObject("SELECT id FROM dz_club WHERE club_no = ? AND creator_user_id = ? " +
+                "ORDER BY id DESC LIMIT 1", Long.class, clubNo, userId);
+
+        long inviteCode = uniqueInviteCode(clubId);
+        jdbc.update("INSERT INTO dz_club_member (club_id, user_id, nickname, role, parent_user_id, level, " +
+                        "invite_code, partner_rate, status, created_at) VALUES (?,?,?,?,0,0,?,0,1,?)",
+                clubId, userId, nickname, ROLE_OWNER, inviteCode, now());
+        log.info("创建俱乐部: clubId={}, clubNo={}, name={}, creator={}, 钻石={}", clubId, clubNo, name, userId, cost);
+
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("clubId", clubId);
+        m.put("clubNo", clubNo);
+        m.put("name", name.trim());
+        m.put("myInviteCode", inviteCode);
+        m.put("diamondCost", cost);
+        m.put("diamond", diamondService.balance(userId));
+        return m;
+    }
+
+    /** 6 位唯一编号(100000-999999) */
+    private long uniqueNo(String checkSql) {
+        for (int i = 0; i < 20; i++) {
+            long no = ThreadLocalRandom.current().nextLong(100000, 1000000);
+            Integer c = jdbc.queryForObject(checkSql, Integer.class, no);
+            if (c == null || c == 0) return no;
+        }
+        throw new ClubException("编号分配失败,请重试");
+    }
+
+    private long uniqueInviteCode(long clubId) {
+        for (int i = 0; i < 20; i++) {
+            long code = ThreadLocalRandom.current().nextLong(100000, 1000000);
+            Integer c = jdbc.queryForObject(
+                    "SELECT COUNT(*) FROM dz_club_member WHERE club_id = ? AND invite_code = ?",
+                    Integer.class, clubId, code);
+            if (c == null || c == 0) return code;
+        }
+        throw new ClubException("邀请码分配失败,请重试");
+    }
+
+    // ================================================================
+    // 查询
+    // ================================================================
+
+    /** 我加入的俱乐部列表 */
+    public List<Map<String, Object>> myClubs(long userId) {
+        requireDb();
+        return jdbc.query("SELECT c.id, c.club_no, c.name, c.notice, c.creator_user_id, " +
+                        "m.role, m.invite_code, m.partner_rate, " +
+                        "(SELECT COUNT(*) FROM dz_club_member x WHERE x.club_id = c.id AND x.status = 1) AS members, " +
+                        "(SELECT COUNT(*) FROM dz_club_join_request r WHERE r.club_id = c.id AND r.status = 0) AS pendings " +
+                        "FROM dz_club_member m JOIN dz_club c ON c.id = m.club_id " +
+                        "WHERE m.user_id = ? AND m.status = 1 AND c.state = 1 ORDER BY c.id",
+                (rs, i) -> {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("clubId", rs.getLong("id"));
+                    m.put("clubNo", rs.getLong("club_no"));
+                    m.put("name", rs.getString("name"));
+                    m.put("notice", rs.getString("notice"));
+                    m.put("ownerUserId", rs.getLong("creator_user_id"));
+                    m.put("myRole", rs.getInt("role"));
+                    m.put("myInviteCode", rs.getLong("invite_code"));
+                    m.put("myPartnerRate", rs.getInt("partner_rate"));
+                    m.put("memberCount", rs.getLong("members"));
+                    // 待审数只透给能审批的人
+                    m.put("pendingCount", rs.getInt("role") >= ROLE_ADMIN && rs.getInt("role") != ROLE_PARTNER
+                            ? rs.getLong("pendings") : 0);
+                    return m;
+                }, userId);
+    }
+
+    /** 成员信息(不在或非活跃返回 null) */
+    public Map<String, Object> member(long clubId, long userId) {
+        requireDb();
+        List<Map<String, Object>> list = jdbc.query(
+                "SELECT * FROM dz_club_member WHERE club_id = ? AND user_id = ? AND status = 1",
+                (rs, i) -> memberRow(rs), clubId, userId);
+        return list.isEmpty() ? null : list.get(0);
+    }
+
+    public boolean isMember(long clubId, long userId) {
+        if (jdbc == null) return false;
+        Integer c = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM dz_club_member WHERE club_id = ? AND user_id = ? AND status = 1",
+                Integer.class, clubId, userId);
+        return c != null && c > 0;
+    }
+
+    /** 建房权限:群主/管理员(对齐扯旋 canCreateGame) */
+    public boolean canCreateRoom(long clubId, long userId) {
+        Map<String, Object> m = member(clubId, userId);
+        if (m == null) return false;
+        int role = (int) m.get("role");
+        return role == ROLE_OWNER || role == ROLE_ADMIN;
+    }
+
+    /** 成员列表 */
+    public List<Map<String, Object>> members(long clubId, long userId) {
+        requireDb();
+        if (!isMember(clubId, userId)) throw new ClubException("不是俱乐部成员");
+        return jdbc.query("SELECT * FROM dz_club_member WHERE club_id = ? AND status = 1 " +
+                "ORDER BY role DESC, id", (rs, i) -> memberRow(rs), clubId);
+    }
+
+    private Map<String, Object> memberRow(java.sql.ResultSet rs) throws java.sql.SQLException {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("userId", rs.getLong("user_id"));
+        m.put("nickname", rs.getString("nickname"));
+        m.put("role", rs.getInt("role"));
+        m.put("parentUserId", rs.getLong("parent_user_id"));
+        m.put("level", rs.getInt("level"));
+        m.put("inviteCode", rs.getLong("invite_code"));
+        m.put("partnerRate", rs.getInt("partner_rate"));
+        return m;
+    }
+
+    // ================================================================
+    // 申请 / 审批
+    // ================================================================
+
+    /** 申请加入:code 先当俱乐部号,再当邀请码(对齐扯旋)。返回 {clubId, clubName, codeType} */
+    public Map<String, Object> apply(long userId, String nickname, long code) {
+        requireDb();
+        Long clubId = null;
+        int codeType = 1;
+        long inviter = 0;
+        List<Map<String, Object>> byNo = jdbc.query(
+                "SELECT id FROM dz_club WHERE club_no = ? AND state = 1",
+                (rs, i) -> Map.of("id", rs.getLong("id")), code);
+        if (!byNo.isEmpty()) {
+            clubId = (Long) byNo.get(0).get("id");
+        } else {
+            List<Map<String, Object>> byInvite = jdbc.query(
+                    "SELECT m.club_id, m.user_id FROM dz_club_member m JOIN dz_club c ON c.id = m.club_id " +
+                            "WHERE m.invite_code = ? AND m.status = 1 AND c.state = 1",
+                    (rs, i) -> Map.of("clubId", rs.getLong("club_id"), "userId", rs.getLong("user_id")), code);
+            if (!byInvite.isEmpty()) {
+                clubId = (Long) byInvite.get(0).get("clubId");
+                inviter = (Long) byInvite.get(0).get("userId");
+                codeType = 2;
+            }
+        }
+        if (clubId == null) throw new ClubException("俱乐部号/邀请码不存在");
+        if (isMember(clubId, userId)) throw new ClubException("您已经是该俱乐部成员");
+
+        Integer pending = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM dz_club_join_request WHERE club_id = ? AND user_id = ? AND status = 0",
+                Integer.class, clubId, userId);
+        if (pending != null && pending > 0) throw new ClubException("已申请,等待审批");
+        // 历史已处理的申请删掉重新排队(被踢/被拒后可重申)
+        jdbc.update("DELETE FROM dz_club_join_request WHERE club_id = ? AND user_id = ? AND status <> 0",
+                clubId, userId);
+        jdbc.update("INSERT INTO dz_club_join_request (club_id, user_id, nickname, code_used, code_type, " +
+                        "inviter_user_id, status, created_at) VALUES (?,?,?,?,?,?,0,?)",
+                clubId, userId, nickname, code, codeType, inviter, now());
+
+        String clubName = jdbc.queryForObject("SELECT name FROM dz_club WHERE id = ?", String.class, clubId);
+        log.info("申请入会: clubId={}, userId={}, code={}, type={}", clubId, userId, code, codeType);
+        return Map.of("clubId", clubId, "clubName", clubName == null ? "" : clubName, "codeType", codeType);
+    }
+
+    /** 待审批列表(群主/管理员) */
+    public List<Map<String, Object>> applyList(long clubId, long userId) {
+        requireDb();
+        requireOwnerOrAdmin(clubId, userId);
+        return jdbc.query("SELECT id, user_id, nickname, code_used, code_type, inviter_user_id, created_at " +
+                        "FROM dz_club_join_request WHERE club_id = ? AND status = 0 ORDER BY id",
+                (rs, i) -> {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("requestId", rs.getLong("id"));
+                    m.put("userId", rs.getLong("user_id"));
+                    m.put("nickname", rs.getString("nickname"));
+                    m.put("codeType", rs.getInt("code_type"));
+                    m.put("inviterUserId", rs.getLong("inviter_user_id"));
+                    m.put("time", rs.getTimestamp("created_at").getTime());
+                    return m;
+                }, clubId);
+    }
+
+    /** 审批(approve=true 同意)。返回申请人 userId(便于上层推送通知) */
+    public long review(long clubId, long operatorId, long requestId, boolean approve) {
+        requireDb();
+        requireOwnerOrAdmin(clubId, operatorId);
+        List<Map<String, Object>> reqs = jdbc.query(
+                "SELECT user_id, nickname, code_type, inviter_user_id, status FROM dz_club_join_request " +
+                        "WHERE id = ? AND club_id = ?",
+                (rs, i) -> {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("userId", rs.getLong("user_id"));
+                    m.put("nickname", rs.getString("nickname"));
+                    m.put("codeType", rs.getInt("code_type"));
+                    m.put("inviter", rs.getLong("inviter_user_id"));
+                    m.put("status", rs.getInt("status"));
+                    return m;
+                }, requestId, clubId);
+        if (reqs.isEmpty()) throw new ClubException("申请不存在");
+        Map<String, Object> req = reqs.get(0);
+        if ((int) req.get("status") != 0) throw new ClubException("该申请已处理");
+        long applicant = (long) req.get("userId");
+
+        if (approve) {
+            if (isMember(clubId, applicant)) throw new ClubException("该用户已经是俱乐部成员");
+            long parent;
+            int level;
+            if ((int) req.get("codeType") == 2 && (long) req.get("inviter") > 0) {
+                parent = (long) req.get("inviter");
+                Map<String, Object> pm = member(clubId, parent);
+                level = pm != null ? (int) pm.get("level") + 1 : 1;
+            } else {
+                parent = ownerOf(clubId);
+                level = 1;
+            }
+            long inviteCode = uniqueInviteCode(clubId);
+            jdbc.update("INSERT INTO dz_club_member (club_id, user_id, nickname, role, parent_user_id, level, " +
+                            "invite_code, partner_rate, status, created_at) VALUES (?,?,?,?,?,?,?,0,1,?)",
+                    clubId, applicant, req.get("nickname"), ROLE_MEMBER, parent, level, inviteCode, now());
+        }
+        jdbc.update("UPDATE dz_club_join_request SET status = ?, reviewer_user_id = ?, reviewed_at = ? WHERE id = ?",
+                approve ? 1 : 2, operatorId, now(), requestId);
+        log.info("审批入会: clubId={}, requestId={}, applicant={}, approve={}, by={}",
+                clubId, requestId, applicant, approve, operatorId);
+        return applicant;
+    }
+
+    // ================================================================
+    // 角色管理 / 踢人 / 退出 / 解散
+    // ================================================================
+
+    /**
+     * 设置角色(对齐扯旋):
+     *   设/撤管理员(role 1↔2):仅群主;
+     *   设合伙人(role→4,带 partnerRate):群主/管理员/合伙人,且目标必须是自己直推(群主不限);
+     *   合伙人比例只升不降(扯旋规则)。
+     */
+    public void setRole(long clubId, long operatorId, long targetUserId, int role, int partnerRate) {
+        requireDb();
+        Map<String, Object> op = member(clubId, operatorId);
+        Map<String, Object> target = member(clubId, targetUserId);
+        if (op == null) throw new ClubException("不是俱乐部成员");
+        if (target == null) throw new ClubException("目标不是俱乐部成员");
+        int opRole = (int) op.get("role");
+        int targetRole = (int) target.get("role");
+        if (targetRole == ROLE_OWNER) throw new ClubException("不能修改群主角色");
+
+        if (role == ROLE_ADMIN || (role == ROLE_MEMBER && targetRole == ROLE_ADMIN)) {
+            // 设/撤管理员:仅群主
+            if (opRole != ROLE_OWNER) throw new ClubException("只有群主能设置管理员");
+            jdbc.update("UPDATE dz_club_member SET role = ? WHERE club_id = ? AND user_id = ?",
+                    role, clubId, targetUserId);
+        } else if (role == ROLE_PARTNER) {
+            if (opRole != ROLE_OWNER && opRole != ROLE_ADMIN && opRole != ROLE_PARTNER) {
+                throw new ClubException("无权设置合伙人");
+            }
+            if (opRole != ROLE_OWNER && (long) target.get("parentUserId") != operatorId) {
+                throw new ClubException("只能设置自己直推的成员为合伙人");
+            }
+            if (partnerRate < 0 || partnerRate > 100) throw new ClubException("比例须在 0-100");
+            int oldRate = (int) target.get("partnerRate");
+            if (targetRole == ROLE_PARTNER && partnerRate < oldRate) {
+                throw new ClubException("合伙人比例只能上调");
+            }
+            jdbc.update("UPDATE dz_club_member SET role = ?, partner_rate = ? WHERE club_id = ? AND user_id = ?",
+                    ROLE_PARTNER, partnerRate, clubId, targetUserId);
+        } else if (role == ROLE_MEMBER) {
+            // 撤合伙人 → 成员:仅群主
+            if (opRole != ROLE_OWNER) throw new ClubException("只有群主能取消合伙人");
+            jdbc.update("UPDATE dz_club_member SET role = 1, partner_rate = 0 WHERE club_id = ? AND user_id = ?",
+                    clubId, targetUserId);
+        } else {
+            throw new ClubException("非法角色");
+        }
+        log.info("设置角色: clubId={}, target={}, role={}, rate={}, by={}",
+                clubId, targetUserId, role, partnerRate, operatorId);
+    }
+
+    /** 踢人:群主/管理员可踢任意(除群主);合伙人只能踢自己直推。下级整体上挂到被踢者的上级 */
+    public void kick(long clubId, long operatorId, long targetUserId) {
+        requireDb();
+        Map<String, Object> op = member(clubId, operatorId);
+        Map<String, Object> target = member(clubId, targetUserId);
+        if (op == null || target == null) throw new ClubException("成员不存在");
+        int opRole = (int) op.get("role");
+        if ((int) target.get("role") == ROLE_OWNER) throw new ClubException("不能踢群主");
+        if (opRole == ROLE_PARTNER) {
+            if ((long) target.get("parentUserId") != operatorId) throw new ClubException("只能移除自己直推的成员");
+        } else if (opRole != ROLE_OWNER && opRole != ROLE_ADMIN) {
+            throw new ClubException("无权移除成员");
+        }
+        removeMember(clubId, targetUserId, (long) target.get("parentUserId"));
+        log.info("踢出成员: clubId={}, target={}, by={}", clubId, targetUserId, operatorId);
+    }
+
+    /** 退出俱乐部(群主不可退) */
+    public void quit(long clubId, long userId) {
+        requireDb();
+        Map<String, Object> me = member(clubId, userId);
+        if (me == null) throw new ClubException("不是俱乐部成员");
+        if ((int) me.get("role") == ROLE_OWNER) throw new ClubException("群主不能退出,可解散俱乐部");
+        removeMember(clubId, userId, (long) me.get("parentUserId"));
+        log.info("退出俱乐部: clubId={}, userId={}", clubId, userId);
+    }
+
+    /** 解散(仅群主):state=2,成员全删 */
+    public void dissolve(long clubId, long userId) {
+        requireDb();
+        Long owner = ownerOf(clubId);
+        if (owner == null || owner != userId) throw new ClubException("只有群主能解散俱乐部");
+        jdbc.update("UPDATE dz_club SET state = 2, dissolved_at = ? WHERE id = ?", now(), clubId);
+        jdbc.update("DELETE FROM dz_club_member WHERE club_id = ?", clubId);
+        jdbc.update("DELETE FROM dz_club_join_request WHERE club_id = ?", clubId);
+        log.info("解散俱乐部: clubId={}, by={}", clubId, userId);
+    }
+
+    /** 删成员 + 下级 reparent + 清申请记录 */
+    private void removeMember(long clubId, long userId, long reparentTo) {
+        jdbc.update("UPDATE dz_club_member SET parent_user_id = ? WHERE club_id = ? AND parent_user_id = ?",
+                reparentTo, clubId, userId);
+        jdbc.update("DELETE FROM dz_club_member WHERE club_id = ? AND user_id = ?", clubId, userId);
+        jdbc.update("DELETE FROM dz_club_join_request WHERE club_id = ? AND user_id = ?", clubId, userId);
+    }
+
+    private Long ownerOf(long clubId) {
+        return jdbc.queryForObject("SELECT creator_user_id FROM dz_club WHERE id = ?", Long.class, clubId);
+    }
+
+    public String clubName(long clubId) {
+        if (jdbc == null) return "";
+        try {
+            String name = jdbc.queryForObject("SELECT name FROM dz_club WHERE id = ?", String.class, clubId);
+            return name == null ? "" : name;
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    private void requireOwnerOrAdmin(long clubId, long userId) {
+        Map<String, Object> m = member(clubId, userId);
+        if (m == null) throw new ClubException("不是俱乐部成员");
+        int role = (int) m.get("role");
+        if (role != ROLE_OWNER && role != ROLE_ADMIN) throw new ClubException("需要群主/管理员权限");
+    }
+
+    // ================================================================
+    // 合伙人分成(对齐扯旋 distributeCommission)
+    // ================================================================
+
+    /** 玩家是否该俱乐部群主(群主免抽) */
+    public boolean isOwner(long clubId, long userId) {
+        if (jdbc == null) return false;
+        Long owner = ownerOf(clubId);
+        return owner != null && owner == userId;
+    }
+
+    /**
+     * 抽水分成:沿被抽玩家的 parent 链上溯到群主,反转为「群主→…→玩家」,
+     * 只有群主(3)/合伙人(4)参与;每级把「剩余 × 下游 partnerRate%」让给下一个有资格的下游,
+     * 末端拿剩余。份额直接进各自德州钱包 + dz_commission_log 流水。
+     * 任何异常只打日志,不影响牌局结算。
+     */
+    public void distributeRake(long clubId, long roomId, long fromUserId, long totalProfit, long rake) {
+        if (jdbc == null || rake <= 0 || clubId <= 0) return;
+        try {
+            // 上溯链(玩家→群主),最多 20 层防环
+            List<Map<String, Object>> chain = new ArrayList<>();
+            long cur = fromUserId;
+            for (int i = 0; i < 20; i++) {
+                Map<String, Object> m = member(clubId, cur);
+                if (m == null) break;
+                chain.add(m);
+                long parent = (long) m.get("parentUserId");
+                if (parent <= 0) break;
+                cur = parent;
+            }
+            // 反转成 群主→…→玩家,只留 群主/合伙人,且排除被抽玩家本人
+            List<Map<String, Object>> eligible = new ArrayList<>();
+            for (int i = chain.size() - 1; i >= 0; i--) {
+                Map<String, Object> m = chain.get(i);
+                int role = (int) m.get("role");
+                long uid = (long) m.get("userId");
+                if (uid == fromUserId) continue;
+                if (role == ROLE_OWNER || role == ROLE_PARTNER) eligible.add(m);
+            }
+            if (eligible.isEmpty()) {
+                // 链上没人(理论上至少有群主):全给群主兜底
+                Long owner = ownerOf(clubId);
+                if (owner == null) return;
+                credit(clubId, roomId, fromUserId, owner, "OWNER", totalProfit, rake, rake, 100);
+                return;
+            }
+            long remaining = rake;
+            for (int i = 0; i < eligible.size() && remaining > 0; i++) {
+                Map<String, Object> holder = eligible.get(i);
+                Map<String, Object> next = (i + 1 < eligible.size()) ? eligible.get(i + 1) : null;
+                long share;
+                int rate;
+                if (next == null) {
+                    share = remaining;
+                    rate = 100;
+                } else {
+                    int nextRate = (int) next.get("partnerRate");
+                    long give = remaining * nextRate / 100;
+                    share = remaining - give;
+                    rate = 100 - nextRate;
+                    remaining = give;
+                }
+                if (share > 0) {
+                    long uid = (long) holder.get("userId");
+                    String toRole = (int) holder.get("role") == ROLE_OWNER ? "OWNER" : "PARTNER";
+                    credit(clubId, roomId, fromUserId, uid, toRole, totalProfit, rake, share, rate);
+                }
+                if (next == null) remaining = 0;
+            }
+        } catch (Exception e) {
+            log.error("抽水分成失败: clubId={}, roomId={}, from={}, rake={}", clubId, roomId, fromUserId, rake, e);
+        }
+    }
+
+    private void credit(long clubId, long roomId, long fromUserId, long toUserId, String toRole,
+                        long totalProfit, long commission, long share, int rate) {
+        walletService.credit(toUserId, share);
+        jdbc.update("INSERT INTO dz_commission_log (club_id, room_id, from_user_id, to_user_id, to_role, " +
+                        "total_profit, commission, share_amount, share_rate, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                clubId, roomId, fromUserId, toUserId, toRole, totalProfit, commission, share, rate, now());
+        log.info("抽水分成: clubId={}, room={}, {} ← {} 分得 {}({}%),抽水共 {}",
+                clubId, roomId, toRole, fromUserId, share, rate, commission);
+    }
+}

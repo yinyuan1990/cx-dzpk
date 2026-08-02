@@ -23,6 +23,8 @@ public class DzRoom {
     private long roomId;
     private String name;
     private long creatorUserId;
+    /** 所属俱乐部(0=公开房) */
+    private long clubId;
 
     /** 小盲 */
     private long sb;

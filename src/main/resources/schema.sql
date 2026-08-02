@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS dz_room (
     id              BIGINT AUTO_INCREMENT PRIMARY KEY,
     room_id         BIGINT       NOT NULL,
     name            VARCHAR(64)  NOT NULL DEFAULT '',
+    club_id         BIGINT       NOT NULL DEFAULT 0,
     creator_user_id BIGINT       NOT NULL DEFAULT 0,
     sb              BIGINT       NOT NULL DEFAULT 0,
     bb              BIGINT       NOT NULL DEFAULT 0,
@@ -91,9 +92,87 @@ CREATE TABLE IF NOT EXISTS dz_diamond_log (
 );
 CREATE INDEX idx_dz_diamond_user ON dz_diamond_log (user_id, created_at);
 
+-- ============================================================
+-- 俱乐部体系(德州独立俱乐部,规则对齐扯旋)
+-- ============================================================
+
+-- 俱乐部(state: 1正常 2解散)
+CREATE TABLE IF NOT EXISTS dz_club (
+    id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+    club_no         BIGINT       NOT NULL,
+    name            VARCHAR(32)  NOT NULL,
+    notice          VARCHAR(256) NOT NULL DEFAULT '',
+    creator_user_id BIGINT       NOT NULL,
+    state           TINYINT      NOT NULL DEFAULT 1,
+    diamond_cost    BIGINT       NOT NULL DEFAULT 0,
+    created_at      DATETIME     NOT NULL,
+    dissolved_at    DATETIME     NULL
+);
+CREATE INDEX idx_dz_club_no ON dz_club (club_no);
+CREATE INDEX idx_dz_club_creator ON dz_club (creator_user_id);
+
+-- 俱乐部成员(role: 1成员 2管理员 3创建者 4合伙人;
+--   parent_user_id/level=推荐树;invite_code 俱乐部内唯一 6 位;
+--   partner_rate=上级让给该合伙人的抽水比例 0-100)
+CREATE TABLE IF NOT EXISTS dz_club_member (
+    id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+    club_id         BIGINT       NOT NULL,
+    user_id         BIGINT       NOT NULL,
+    nickname        VARCHAR(64)  NOT NULL DEFAULT '',
+    role            TINYINT      NOT NULL DEFAULT 1,
+    parent_user_id  BIGINT       NOT NULL DEFAULT 0,
+    level           INT          NOT NULL DEFAULT 0,
+    invite_code     BIGINT       NOT NULL DEFAULT 0,
+    partner_rate    INT          NOT NULL DEFAULT 0,
+    status          TINYINT      NOT NULL DEFAULT 1,
+    created_at      DATETIME     NOT NULL
+);
+CREATE INDEX idx_dz_cm_club_user ON dz_club_member (club_id, user_id);
+CREATE INDEX idx_dz_cm_user ON dz_club_member (user_id);
+CREATE INDEX idx_dz_cm_invite ON dz_club_member (club_id, invite_code);
+
+-- 入会申请(status: 0待审 1已同意 2已拒绝;code_type: 1俱乐部号 2邀请码)
+CREATE TABLE IF NOT EXISTS dz_club_join_request (
+    id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+    club_id         BIGINT       NOT NULL,
+    user_id         BIGINT       NOT NULL,
+    nickname        VARCHAR(64)  NOT NULL DEFAULT '',
+    code_used       BIGINT       NOT NULL DEFAULT 0,
+    code_type       TINYINT      NOT NULL DEFAULT 1,
+    inviter_user_id BIGINT       NOT NULL DEFAULT 0,
+    status          TINYINT      NOT NULL DEFAULT 0,
+    reviewer_user_id BIGINT      NOT NULL DEFAULT 0,
+    created_at      DATETIME     NOT NULL,
+    reviewed_at     DATETIME     NULL
+);
+CREATE INDEX idx_dz_cjr_club ON dz_club_join_request (club_id, status);
+CREATE INDEX idx_dz_cjr_user ON dz_club_join_request (user_id);
+
+-- 抽水分成流水(周期/站起结算的 rake 沿推荐链分给 群主/合伙人)
+CREATE TABLE IF NOT EXISTS dz_commission_log (
+    id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+    club_id         BIGINT       NOT NULL,
+    room_id         BIGINT       NOT NULL,
+    from_user_id    BIGINT       NOT NULL,
+    to_user_id      BIGINT       NOT NULL,
+    to_role         VARCHAR(8)   NOT NULL DEFAULT '',
+    total_profit    BIGINT       NOT NULL DEFAULT 0,
+    commission      BIGINT       NOT NULL DEFAULT 0,
+    share_amount    BIGINT       NOT NULL DEFAULT 0,
+    share_rate      INT          NOT NULL DEFAULT 0,
+    created_at      DATETIME     NOT NULL
+);
+CREATE INDEX idx_dz_cl_to ON dz_commission_log (to_user_id, created_at);
+CREATE INDEX idx_dz_cl_club ON dz_commission_log (club_id);
+
 -- 主服用户表最小结构 — 仅开发 H2 生效;
 -- 生产 dzpk.diamond-user-table 配成 chexuan_game.user,本表不使用(建了也无妨)
 CREATE TABLE IF NOT EXISTS `user` (
     id              BIGINT       PRIMARY KEY,
     diamond         BIGINT       NOT NULL DEFAULT 0
 );
+
+-- ============================================================
+-- 增量迁移(表已存在时补列;重复执行报错由 continue-on-error 忽略)
+-- ============================================================
+ALTER TABLE dz_room ADD COLUMN club_id BIGINT NOT NULL DEFAULT 0;

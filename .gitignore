@@ -12,3 +12,7 @@ target/
 
 .DS_Store
 Thumbs.db
+
+# 前端产物(cx-dzpk-pixi npm run build 后拷入,只在打包部署时用,不入库;联调页 debug.html 保留)
+src/main/resources/static/*
+!src/main/resources/static/debug.html

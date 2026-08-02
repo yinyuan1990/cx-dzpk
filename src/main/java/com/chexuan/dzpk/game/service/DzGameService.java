@@ -43,6 +43,8 @@ public class DzGameService {
     private final WalletService walletService;
     private final GameBroadcaster broadcaster;
     private final DzRecordStore records;
+    /** 俱乐部服务(合伙人分成/群主免抽);单测可为 null */
+    private final com.chexuan.dzpk.club.DzClubService clubService;
 
     @Value("${dzpk.action-timeout-secs:15}")
     private int actionTimeoutSecs;
@@ -56,18 +58,19 @@ public class DzGameService {
     @org.springframework.beans.factory.annotation.Autowired
     public DzGameService(DzRoomManager roomManager, RoomWorkerService roomWorker,
                          WalletService walletService, GameBroadcaster broadcaster,
-                         DzRecordStore records) {
+                         DzRecordStore records, com.chexuan.dzpk.club.DzClubService clubService) {
         this.roomManager = roomManager;
         this.roomWorker = roomWorker;
         this.walletService = walletService;
         this.broadcaster = broadcaster;
         this.records = records;
+        this.clubService = clubService;
     }
 
-    /** 单测用:不落库 */
+    /** 单测用:不落库、无俱乐部 */
     public DzGameService(DzRoomManager roomManager, RoomWorkerService roomWorker,
                          WalletService walletService, GameBroadcaster broadcaster) {
-        this(roomManager, roomWorker, walletService, broadcaster, new DzRecordStore(null));
+        this(roomManager, roomWorker, walletService, broadcaster, new DzRecordStore(null), null);
     }
 
     // ================================================================
@@ -681,7 +684,7 @@ public class DzGameService {
         long bringIn = p.getBringInThisPeriod();
         long stack = p.getStack();
         long profit = stack - bringIn;
-        long rake = (profit > 0 && room.getRakePercent() > 0) ? profit * room.getRakePercent() / 100 : 0;
+        long rake = applyRake(room, p, profit);
         long refund = stack - rake;
         if (refund > 0) {
             walletService.credit(p.getUserId(), refund);
@@ -771,7 +774,7 @@ public class DzGameService {
         long stack = p.getStack();
         long bringIn = p.getBringInThisPeriod();
         long profit = stack - bringIn;
-        long rake = (profit > 0 && room.getRakePercent() > 0) ? profit * room.getRakePercent() / 100 : 0;
+        long rake = applyRake(room, p, profit);
         long refund = stack - rake;
         if (refund > 0) {
             walletService.credit(p.getUserId(), refund);
@@ -799,6 +802,25 @@ public class DzGameService {
         broadcaster.toRoom(room.getRoomId(), GameMessage.create(MsgType.PLAYER_STAND, room.getRoomId(), data));
         log.info("站起: roomId={}, userId={}, reason={}, bringIn={}, stack={}, profit={}, rake={}, refund={}",
                 room.getRoomId(), p.getUserId(), reason, bringIn, stack, profit, rake, refund);
+    }
+
+    /**
+     * 计算并落地抽水(对齐扯旋 applyCommissionOnStandUp):
+     *   盈利 ≤ 0 不抽;俱乐部房群主免抽;
+     *   俱乐部房的抽水沿推荐链分给 群主/合伙人(多层按 partner_rate 让利);
+     *   公开房抽水归平台(不分配)。
+     */
+    private long applyRake(DzRoom room, DzPlayer p, long profit) {
+        if (profit <= 0 || room.getRakePercent() <= 0) return 0;
+        boolean clubRoom = room.getClubId() > 0 && clubService != null;
+        if (clubRoom && clubService.isOwner(room.getClubId(), p.getUserId())) {
+            return 0;
+        }
+        long rake = profit * room.getRakePercent() / 100;
+        if (rake > 0 && clubRoom) {
+            clubService.distributeRake(room.getClubId(), room.getRoomId(), p.getUserId(), profit, rake);
+        }
+        return rake;
     }
 
     // ================================================================
@@ -853,6 +875,7 @@ public class DzGameService {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("roomId", room.getRoomId());
         m.put("name", room.getName());
+        m.put("clubId", room.getClubId());
         m.put("sb", room.getSb());
         m.put("bb", room.getBb());
         m.put("maxPlayers", room.getMaxPlayers());
