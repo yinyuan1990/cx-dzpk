@@ -1,0 +1,23 @@
+# 德州子游戏 — 独立 compose 项目,与扯旋(chexuan)互不影响
+# 部署目录: /home/fzcx/cx-dzpk (每个子游戏单独一个文件夹,与 /home/fzcx/chexuan 平级)
+# 宿主端口 19100 → 容器 9100
+services:
+  dzpk:
+    build: .
+    container_name: cx-dzpk
+    ports:
+      - "19100:9100"
+    environment:
+      TZ: Asia/Shanghai
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:9100/index.html || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
