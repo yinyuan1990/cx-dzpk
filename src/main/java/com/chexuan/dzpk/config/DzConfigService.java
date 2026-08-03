@@ -42,6 +42,9 @@ public class DzConfigService {
         DEFS.put("room_max_rate_options", new Def("2,4,10", "建房参数", "可选最大带入倍数(带入上限=100大盲×倍数)"));
         DEFS.put("room_min_time_options", new Def("0,30,60", "建房参数", "可选最短上桌时间(分钟,0=不限)"));
         DEFS.put("room_rake_percent_options", new Def("0,3,5,10", "建房参数", "可选抽水比例%(对盈利抽)"));
+        // GPS 防火牌(对齐扯旋 gps_min_distance_meters / gps_max_age_seconds)
+        DEFS.put("gps_min_distance_m", new Def("100", "系统", "GPS防火牌:同桌玩家最小距离(米),开了GPS限制的桌坐下时校验"));
+        DEFS.put("gps_max_age_secs", new Def("90", "系统", "GPS防火牌:定位数据最大有效期(秒),过期视为未上报"));
         // ---- 留座暂离 ----
         DEFS.put("seat_reserve_grace_secs", new Def("300", "留座暂离", "放假倒计时(秒),每周期一次,超时自动站起"));
         DEFS.put("seat_lock_secs", new Def("480", "留座暂离", "放假超时站起后座位物理保留(秒)"));

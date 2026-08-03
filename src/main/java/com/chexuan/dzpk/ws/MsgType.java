@@ -43,6 +43,7 @@ public final class MsgType {
     public static final int CLUB_DISSOLVE = 429;    // {clubId}
     public static final int CLUB_SCORE_OP = 430;    // {clubId, op:"ownerAdd|ownerBurn|distribute|collect|transfer", userId?, amount}
     public static final int CLUB_SCORE_LOGS = 431;  // {clubId, userId?(群主/管理员可查他人), limit?}
+    public static final int GPS_REPORT = 432;       // {lat, lng} 前端定时上报定位(GPS 防火牌用,无应答)
 
     // ==================== S → C ====================
     public static final int LOGIN_RES = 451;

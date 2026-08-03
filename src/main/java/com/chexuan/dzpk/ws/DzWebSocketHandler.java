@@ -49,6 +49,7 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
     private final DzClubService clubService;
     private final com.chexuan.dzpk.config.DzConfigService cfg;
     private final com.chexuan.dzpk.gift.DzGiftService giftService;
+    private final com.chexuan.dzpk.game.service.GpsService gpsService;
 
     @Value("${dzpk.allow-guest:false}")
     private boolean allowGuest;
@@ -62,7 +63,8 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
                               DzRoomManager roomManager, WalletService walletService,
                               DiamondService diamondService, DzRecordStore records,
                               DzClubService clubService, com.chexuan.dzpk.config.DzConfigService cfg,
-                              com.chexuan.dzpk.gift.DzGiftService giftService) {
+                              com.chexuan.dzpk.gift.DzGiftService giftService,
+                              com.chexuan.dzpk.game.service.GpsService gpsService) {
         this.objectMapper = objectMapper;
         this.jwtVerifier = jwtVerifier;
         this.registry = registry;
@@ -74,6 +76,7 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
         this.clubService = clubService;
         this.cfg = cfg;
         this.giftService = giftService;
+        this.gpsService = gpsService;
     }
 
     @Override
@@ -327,6 +330,9 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
                 };
                 reply(session, msg, MsgType.CLUB_OP_RES, r);
             }
+            // GPS 上报(防火牌):无应答,内存存储
+            case MsgType.GPS_REPORT -> gpsService.update(userId,
+                    dbl(data, "lat"), dbl(data, "lng"));
             case MsgType.CLUB_SCORE_LOGS -> reply(session, msg, MsgType.CLUB_SCORE_LOGS_RES,
                     Map.of("logs", clubService.scoreLogs(lng(data, "clubId", 0), userId,
                             lng(data, "userId", 0), (int) lng(data, "limit", 50))));
@@ -358,6 +364,18 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
     private String str(Map<String, Object> m, String key) {
         Object v = m.get(key);
         return v != null ? v.toString() : null;
+    }
+
+    private Double dbl(Map<String, Object> m, String key) {
+        Object v = m.get(key);
+        if (v instanceof Number n) return n.doubleValue();
+        if (v instanceof String s) {
+            try {
+                return Double.parseDouble(s.trim());
+            } catch (NumberFormatException ignored) {
+            }
+        }
+        return null;
     }
 
     private long lng(Map<String, Object> m, String key, long def) {

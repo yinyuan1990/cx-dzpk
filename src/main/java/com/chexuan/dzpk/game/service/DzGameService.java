@@ -56,6 +56,10 @@ public class DzGameService {
     /** 系统参数中心(管理后台在线调参);单测可为 null(退回 @Value 默认) */
     private final com.chexuan.dzpk.config.DzConfigService cfg;
 
+    /** GPS 防火牌(gpsLimitOn 桌坐下校验);字段注入避免改全部构造器,单测为 null 跳过 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private GpsService gpsService;
+
     @Value("${dzpk.action-timeout-secs:15}")
     private int actionTimeoutSecs;
 
@@ -298,6 +302,19 @@ public class DzGameService {
             if (deny != null) {
                 sendError(userId, roomId, deny);
                 return;
+            }
+            // GPS 防火牌(对齐扯旋):开了 gpsLimitOn 的桌,与桌上每人距离须达标
+            if (room.getRules() != null && room.getRules().isGpsLimitOn() && gpsService != null) {
+                double minM = cfgLong("gps_min_distance_m", 100);
+                long maxAgeMs = cfgLong("gps_max_age_secs", 90) * 1000L;
+                for (DzPlayer sp : room.getSeats()) {
+                    if (sp == null || sp.getUserId() == userId) continue;
+                    String gpsDeny = gpsService.checkPair(userId, sp.getUserId(), minM, maxAgeMs);
+                    if (gpsDeny != null) {
+                        sendError(userId, roomId, gpsDeny);
+                        return;
+                    }
+                }
             }
             room.getSeatLocks().remove(seat);
             DzPlayer p = new DzPlayer();
