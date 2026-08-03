@@ -14,6 +14,8 @@ public class DzPlayer {
 
     private long userId;
     private String nickname;
+    /** 头像 URL(主服账号带出;游客/机器人为空,前端用默认头像) */
+    private String avatar = "";
     private int seat;
 
     /** 桌上筹码 */

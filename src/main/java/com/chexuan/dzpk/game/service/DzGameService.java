@@ -253,6 +253,11 @@ public class DzGameService {
 
     /** ip 用于 AccessRule 同 IP 限制(机器人/单测传 null 跳过) */
     public void sitDown(long roomId, long userId, int seat, String ip) {
+        sitDown(roomId, userId, seat, ip, "");
+    }
+
+    /** avatar 头像 URL(主服账号,坐下广播/快照带给全桌) */
+    public void sitDown(long roomId, long userId, int seat, String ip, String avatar) {
         DzRoom room = roomManager.get(roomId);
         if (room == null) {
             sendError(userId, roomId, "房间不存在");
@@ -320,12 +325,14 @@ public class DzGameService {
             DzPlayer p = new DzPlayer();
             p.setUserId(userId);
             p.setNickname(room.getMembers().get(userId));
+            p.setAvatar(avatar == null ? "" : avatar);
             p.setSeat(seat);
             p.setStack(0);
             p.setIp(ip);
             room.getSeats()[seat] = p;
             broadcaster.toRoom(roomId, GameMessage.create(MsgType.PLAYER_SIT, roomId,
                     Map.of("userId", userId, "nickname", p.getNickname(), "seat", seat,
+                            "avatar", p.getAvatar(),
                             "stack", 0L, "minBuyin", room.getMinBuyin(), "maxBuyin", room.getMaxBuyin())));
         });
     }
@@ -1718,6 +1725,7 @@ public class DzGameService {
             Map<String, Object> pm = new LinkedHashMap<>();
             pm.put("userId", p.getUserId());
             pm.put("nickname", p.getNickname());
+            pm.put("avatar", p.getAvatar() == null ? "" : p.getAvatar());
             pm.put("seat", p.getSeat());
             pm.put("stack", p.getStack());
             pm.put("inHand", p.isInHand());

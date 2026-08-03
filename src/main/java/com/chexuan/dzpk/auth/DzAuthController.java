@@ -98,6 +98,7 @@ public class DzAuthController {
             out.put("token", data.get("token"));
             out.put("userId", data.get("userId"));
             out.put("nickname", data.get("username"));
+            out.put("avatar", data.get("avatar"));
             out.put("diamond", data.get("diamond"));
             return out;
         } catch (Exception e) {

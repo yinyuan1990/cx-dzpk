@@ -47,6 +47,17 @@ public class DiamondService {
         }
     }
 
+    /** 主服头像 URL;游客/机器人/无此列(开发 H2 最小表)返回 null */
+    public String avatar(long userId) {
+        if (jdbc == null || !hasMainAccount(userId)) return null;
+        try {
+            return jdbc.query("SELECT avatar FROM " + userTable + " WHERE id = ?",
+                    rs -> rs.next() ? rs.getString(1) : null, userId);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
     /** 扣钻石(原子:余额不足不扣,返回 false)+ 记流水 */
     public boolean debit(long userId, long amount, String type, String remark) {
         if (amount <= 0) return true;

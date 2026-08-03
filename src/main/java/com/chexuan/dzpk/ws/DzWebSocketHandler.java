@@ -34,6 +34,7 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
 
     private static final String ATTR_USER_ID = "dzpkUserId";
     private static final String ATTR_NICKNAME = "dzpkNickname";
+    private static final String ATTR_AVATAR = "dzpkAvatar";
 
     /** 游客 id 段,与主服真实 userId 区分 */
     private final AtomicLong guestIdGen = new AtomicLong(900_000_001L);
@@ -136,10 +137,14 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
 
         session.getAttributes().put(ATTR_USER_ID, userId);
         session.getAttributes().put(ATTR_NICKNAME, nickname);
+        // 头像:主服账号从主库带出(注册/改资料都在主服);游客无
+        String avatar = diamondService.avatar(userId);
+        if (avatar == null) avatar = "";
+        session.getAttributes().put(ATTR_AVATAR, avatar);
         registry.bind(userId, session);
 
         GameMessage res = GameMessage.create(MsgType.LOGIN_RES, null, Map.of(
-                "userId", userId, "nickname", nickname,
+                "userId", userId, "nickname", nickname, "avatar", avatar,
                 "balance", walletService.balance(userId),
                 "diamond", diamondService.balance(userId)));
         res.setSequence(msg.getSequence());
@@ -246,7 +251,8 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
                     send(session, err(msg, "服务器维护更新中,暂时无法进入游戏,请稍后再来"));
                     return;
                 }
-                gameService.sitDown(roomId, userId, (int) lng(data, "seat", -1), clientIp(session));
+                gameService.sitDown(roomId, userId, (int) lng(data, "seat", -1), clientIp(session),
+                        (String) session.getAttributes().getOrDefault(ATTR_AVATAR, ""));
             }
             case MsgType.BUY_IN -> gameService.buyIn(roomId, userId, lng(data, "amount", 0));
             case MsgType.STAND_UP -> gameService.standUp(roomId, userId,
