@@ -632,27 +632,53 @@ public class DzGameService {
                 sendError(userId, roomId, "只有创建者或群主/管理员可以解散牌局");
                 return;
             }
-            cancelActionTimeout(room);
-            cancelInsurance(room);
-            // 局中解散:本手作废,桌面投入退回,不算战绩
-            if (room.inGame()) {
-                for (DzPlayer p : room.getSeats()) {
-                    if (p == null) continue;
-                    p.setStack(p.getStack() + p.getTotalBetThisHand());
-                    p.resetForHand();
-                }
-                room.setStage(GameStage.WAITING);
-            }
-            for (DzPlayer p : room.getSeats().clone()) {
-                if (p != null) doStandUp(room, p, "dismiss");
-            }
-            broadcaster.toRoom(roomId, GameMessage.create(MsgType.ROOM_DISMISSED, roomId,
-                    Map.of("byUserId", userId)));
-            roomManager.remove(roomId);
-            roomWorker.removeRoom(roomId);
-            records.markRoomClosed(roomId);
-            log.info("解散牌局: roomId={}, by={}", roomId, userId);
+            forceClearRoom(room, userId, "dismiss");
         });
+    }
+
+    /**
+     * 强制清房(解散/停服维护共用,须在 roomWorker 内调):
+     *   局中退回本手投入 → 全员站起结算(dismiss/maintenance 非主动离开,不收罚金) →
+     *   广播 ROOM_DISMISSED → 移除房间。对齐扯旋 forceStandUpAllForMaintenance/285。
+     */
+    private void forceClearRoom(DzRoom room, long byUserId, String reason) {
+        long roomId = room.getRoomId();
+        cancelActionTimeout(room);
+        cancelInsurance(room);
+        // 局中清房:本手作废,桌面投入退回,不算战绩
+        if (room.inGame()) {
+            for (DzPlayer p : room.getSeats()) {
+                if (p == null) continue;
+                p.setStack(p.getStack() + p.getTotalBetThisHand());
+                p.resetForHand();
+            }
+            room.setStage(GameStage.WAITING);
+        }
+        for (DzPlayer p : room.getSeats().clone()) {
+            if (p != null) doStandUp(room, p, reason);
+        }
+        broadcaster.toRoom(roomId, GameMessage.create(MsgType.ROOM_DISMISSED, roomId,
+                Map.of("byUserId", byUserId, "reason", reason)));
+        roomManager.remove(roomId);
+        roomWorker.removeRoom(roomId);
+        records.markRoomClosed(roomId);
+        log.info("强制清房: roomId={}, by={}, reason={}", roomId, byUserId, reason);
+    }
+
+    /**
+     * 停服维护清扫(对齐扯旋 maintenance/toggle):开启维护瞬间调一次。
+     *   没在打牌的桌立即清场请人离开;游戏中的桌打完当前这手在 finishHand 安全点清。
+     */
+    public void maintenanceSweep() {
+        for (DzRoom room : roomManager.list()) {
+            roomWorker.submit(room.getRoomId(), () -> {
+                if (!room.inGame()) {
+                    forceClearRoom(room, 0, "maintenance");
+                }
+                // 游戏中的桌:finishHand 检测 maintenance_mode 后清
+            });
+        }
+        log.warn("停服维护清扫已触发(空闲桌立即清,游戏中的桌局末清)");
     }
 
     public void action(long roomId, long userId, String act, long amount) {
@@ -1349,6 +1375,12 @@ public class DzGameService {
             if (p.getStack() <= 0 && !p.isAwaitingBuyin()) {
                 enterAwaitBuyin(room, p, Map.of("reason", "busted"));
             }
+        }
+
+        // 停服维护(对齐扯旋):打完当前这手即全员站起清场请离房间,不开新局(不收罚金)
+        if (cfgBool("maintenance_mode", false)) {
+            forceClearRoom(room, 0, "maintenance");
+            return;
         }
 
         broadcaster.toRoom(roomId, GameMessage.create(MsgType.ROOM_STATE, roomId, Map.of(

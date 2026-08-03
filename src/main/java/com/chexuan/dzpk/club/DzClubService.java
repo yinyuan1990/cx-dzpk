@@ -402,6 +402,11 @@ public class DzClubService {
         }
     }
 
+    /** 送礼扣分(type=18 礼物赠送,对齐扯旋 GiftService CLUB_SCORE 分支),积分不足抛异常;返回扣后余额 */
+    public long debitScoreForGift(long clubId, long userId, long cost, String remark) {
+        return changeScore(clubId, userId, -cost, 18, 0, remark);
+    }
+
     /** 罚金扣分(type=19 逃跑惩罚,玩家侧;退筹已入账后再扣,余额必够) */
     public void fineScoreForGame(long clubId, long userId, long fine, long roomId) {
         if (fine <= 0) return;

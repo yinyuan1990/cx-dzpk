@@ -196,6 +196,22 @@ CREATE TABLE IF NOT EXISTS dz_commission_log (
 CREATE INDEX idx_dz_cl_to ON dz_commission_log (to_user_id, created_at);
 CREATE INDEX idx_dz_cl_club ON dz_commission_log (club_id);
 
+-- 礼物配置(对齐扯旋 gift_config):
+--   cost_type: SCORE=扣桌面带入 / CLUB_SCORE=扣俱乐部积分(流水type18) / DIAMOND=扣钻石
+--   gift_key 对应前端动画键(meigui/zhadan/huojiantong 等)
+CREATE TABLE IF NOT EXISTS dz_gift_config (
+    id              BIGINT       AUTO_INCREMENT PRIMARY KEY,
+    gift_key        VARCHAR(32)  NOT NULL,
+    name            VARCHAR(32)  NOT NULL,
+    cost_score      BIGINT       NOT NULL DEFAULT 0,
+    cost_type       VARCHAR(16)  NOT NULL DEFAULT '',
+    icon_url        VARCHAR(128) NOT NULL DEFAULT '',
+    anim_key        VARCHAR(32)  NOT NULL DEFAULT '',
+    enabled         TINYINT      NOT NULL DEFAULT 1,
+    sort_no         INT          NOT NULL DEFAULT 0
+);
+CREATE UNIQUE INDEX uk_dz_gift_key ON dz_gift_config (gift_key);
+
 -- 主服用户表最小结构 — 仅开发 H2 生效;
 -- 生产 dzpk.diamond-user-table 配成 chexuan_game.user,本表不使用(建了也无妨)
 CREATE TABLE IF NOT EXISTS `user` (

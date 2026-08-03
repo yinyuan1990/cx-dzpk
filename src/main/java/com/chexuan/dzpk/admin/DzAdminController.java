@@ -33,6 +33,7 @@ public class DzAdminController {
     private final DzRoomManager roomManager;
     private final DzGameService gameService;
     private final WsSessionRegistry registry;
+    private final com.chexuan.dzpk.gift.DzGiftService giftService;
 
     /** token → 过期时间戳 */
     private final Map<String, Long> tokens = new ConcurrentHashMap<>();
@@ -41,11 +42,13 @@ public class DzAdminController {
     private String adminPassword;
 
     public DzAdminController(DzConfigService configService, DzRoomManager roomManager,
-                             DzGameService gameService, WsSessionRegistry registry) {
+                             DzGameService gameService, WsSessionRegistry registry,
+                             com.chexuan.dzpk.gift.DzGiftService giftService) {
         this.configService = configService;
         this.roomManager = roomManager;
         this.gameService = gameService;
         this.registry = registry;
+        this.giftService = giftService;
     }
 
     // ==================== 登录 ====================
@@ -91,10 +94,42 @@ public class DzAdminController {
         String value = String.valueOf(body.getOrDefault("value", ""));
         try {
             configService.update(key, value);
+            // 停服维护开启瞬间清扫(对齐扯旋 maintenance/toggle):空闲桌立即清,游戏中的桌局末清
+            if ("maintenance_mode".equals(key) && configService.getBool("maintenance_mode", false)) {
+                gameService.maintenanceSweep();
+            }
             return Map.of("code", 0, "key", key, "value", value);
         } catch (IllegalArgumentException e) {
             return Map.of("code", 1, "msg", e.getMessage());
         }
+    }
+
+    // ==================== 礼物配置(对齐扯旋 GiftController admin CRUD) ====================
+
+    @GetMapping("/gifts")
+    public Map<String, Object> gifts(@RequestHeader(value = "X-Admin-Token", required = false) String token) {
+        if (!authed(token)) return deny();
+        return Map.of("code", 0, "gifts", giftService.listAll());
+    }
+
+    @PutMapping("/gifts")
+    public Map<String, Object> saveGift(@RequestHeader(value = "X-Admin-Token", required = false) String token,
+                                        @RequestBody Map<String, Object> body) {
+        if (!authed(token)) return deny();
+        try {
+            giftService.save(body);
+            return Map.of("code", 0);
+        } catch (Exception e) {
+            return Map.of("code", 1, "msg", e.getMessage() == null ? "保存失败" : e.getMessage());
+        }
+    }
+
+    @DeleteMapping("/gifts/{id}")
+    public Map<String, Object> deleteGift(@RequestHeader(value = "X-Admin-Token", required = false) String token,
+                                          @PathVariable long id) {
+        if (!authed(token)) return deny();
+        giftService.delete(id);
+        return Map.of("code", 0);
     }
 
     // ==================== 监控 ====================

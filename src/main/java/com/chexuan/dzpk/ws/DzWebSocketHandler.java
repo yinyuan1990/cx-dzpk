@@ -48,6 +48,7 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
     private final DzRecordStore records;
     private final DzClubService clubService;
     private final com.chexuan.dzpk.config.DzConfigService cfg;
+    private final com.chexuan.dzpk.gift.DzGiftService giftService;
 
     @Value("${dzpk.allow-guest:false}")
     private boolean allowGuest;
@@ -60,7 +61,8 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
                               WsSessionRegistry registry, DzGameService gameService,
                               DzRoomManager roomManager, WalletService walletService,
                               DiamondService diamondService, DzRecordStore records,
-                              DzClubService clubService, com.chexuan.dzpk.config.DzConfigService cfg) {
+                              DzClubService clubService, com.chexuan.dzpk.config.DzConfigService cfg,
+                              com.chexuan.dzpk.gift.DzGiftService giftService) {
         this.objectMapper = objectMapper;
         this.jwtVerifier = jwtVerifier;
         this.registry = registry;
@@ -71,6 +73,7 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
         this.records = records;
         this.clubService = clubService;
         this.cfg = cfg;
+        this.giftService = giftService;
     }
 
     @Override
@@ -242,6 +245,10 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
             case MsgType.SEAT_RESERVE_RESUME -> gameService.seatReserveResume(roomId, userId);
             case MsgType.REALTIME_STATS -> gameService.realtimeStats(roomId, userId, msg.getSequence());
             case MsgType.DISMISS_ROOM -> gameService.dismissRoom(roomId, userId);
+            case MsgType.GIFT_LIST -> reply(session, msg, MsgType.GIFT_LIST_RES,
+                    Map.of("gifts", giftService.listEnabled()));
+            case MsgType.GIFT_SEND -> giftService.sendRoomGift(roomId, userId,
+                    lng(data, "giftId", 0), lng(data, "toUserId", 0));
             case MsgType.MY_RECORDS -> {
                 int limit = (int) lng(data, "limit", 20);
                 GameMessage res = GameMessage.create(MsgType.MY_RECORDS_RES, null, Map.of(

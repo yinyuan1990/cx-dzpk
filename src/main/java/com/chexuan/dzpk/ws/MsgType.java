@@ -26,6 +26,8 @@ public final class MsgType {
     public static final int SEAT_RESERVE_RESUME = 414; // 回到座位(对齐扯旋123)
     public static final int REALTIME_STATS = 415;      // 实时战绩(对齐扯旋109)
     public static final int DISMISS_ROOM = 416;        // 解散牌局(对齐扯旋130)
+    public static final int GIFT_LIST = 417;           // 上架礼物列表(对齐扯旋 /api/gift/list)
+    public static final int GIFT_SEND = 418;           // 房间送礼 {giftId, toUserId?}(对齐扯旋161)
 
     // -------- 俱乐部(42x) --------
     public static final int CLUB_CREATE = 420;      // {name, notice?}
@@ -83,6 +85,8 @@ public final class MsgType {
     public static final int CLUB_NOTIFY = 487;      // 推送:审批结果 {clubId, clubName, approve}
     public static final int DIAMOND_WARNING = 488;  // 群主钻石不足警告 {clubId,needed}(对齐扯旋283)
     public static final int CLUB_SCORE_LOGS_RES = 489; // 积分流水 {logs:[...]}
+    public static final int GIFT_LIST_RES = 490;       // 礼物列表 {gifts:[...]}
+    public static final int ROOM_GIFT = 491;           // 房间礼物广播(对齐扯旋351) {fromUserId,fromSeat,toUserId?,toSeat?,giftKey,cost,...}
 
     public static final int ERROR = 499;
 }

@@ -40,4 +40,7 @@ export const api = {
   updateConfig: (key, value) => req('PUT', '/configs', { key, value }),
   overview: () => req('GET', '/overview'),
   dismiss: (roomId) => req('POST', `/rooms/${roomId}/dismiss`),
+  gifts: () => req('GET', '/gifts'),
+  saveGift: (gift) => req('PUT', '/gifts', gift),
+  deleteGift: (id) => req('DELETE', `/gifts/${id}`),
 }

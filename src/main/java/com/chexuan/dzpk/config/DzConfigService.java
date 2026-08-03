@@ -59,7 +59,8 @@ public class DzConfigService {
         DEFS.put("robot_min_delay_ms", new Def("800", "机器人", "机器人行动延迟下限(毫秒)"));
         DEFS.put("robot_max_delay_ms", new Def("2500", "机器人", "机器人行动延迟上限(毫秒)"));
         // ---- 系统 ----
-        DEFS.put("maintenance_mode", new Def("0", "系统", "停服维护(1=禁止坐下/建房,已在玩不受影响)"));
+        DEFS.put("maintenance_mode", new Def("0", "系统",
+                "停服维护(1=开):禁止坐下/建房,空闲桌立即清场,游戏中的桌打完当前这手全员站起请离(不收罚金)。重启后自动恢复为关"));
         DEFS.put("allow_guest", new Def("1", "系统", "允许游客登录(联调用,上线关)"));
     }
 
@@ -88,6 +89,12 @@ public class DzConfigService {
             jdbc.query("SELECT cfg_key, cfg_value FROM dz_system_config", rs -> {
                 cache.put(rs.getString(1), rs.getString(2));
             });
+            // 停服开关重启自动恢复为关(对齐扯旋"后端重启后自动恢复为关闭")
+            if (getBool("maintenance_mode", false)) {
+                jdbc.update("UPDATE dz_system_config SET cfg_value = '0' WHERE cfg_key = 'maintenance_mode'");
+                cache.put("maintenance_mode", "0");
+                log.warn("检测到停服维护开关残留,重启已自动恢复为关闭");
+            }
             log.info("系统参数载入完成: {} 项", cache.size());
         } catch (Exception e) {
             log.error("系统参数初始化失败,使用代码默认值", e);
