@@ -195,6 +195,16 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
                     send(session, err(msg, e.getMessage()));
                     return;
                 }
+                // 结算时长/小盲须在后台配置档内(对齐扯旋 available_settle_time;档位也决定扣钻矩阵行列)
+                if (!cfg.getLongList("room_settle_time_options", "30,45,60,90,120")
+                        .contains((long) rules.getSettleTimeMins())) {
+                    send(session, err(msg, "结算时长 " + rules.getSettleTimeMins() + " 分钟不在可选档内"));
+                    return;
+                }
+                if (!cfg.getLongList("room_blind_options", "50,100,250,500,1000").contains(rules.getSb())) {
+                    send(session, err(msg, "小盲 " + rules.getSb() + " 不在可选档内"));
+                    return;
+                }
                 // 俱乐部房:仅群主/管理员可建(对齐扯旋)
                 if (rules.getClubId() > 0 && !clubService.canCreateRoom(rules.getClubId(), userId)) {
                     send(session, err(msg, "需要群主/管理员权限才能创建俱乐部牌局"));
@@ -247,6 +257,14 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
             case MsgType.DISMISS_ROOM -> gameService.dismissRoom(roomId, userId);
             case MsgType.GIFT_LIST -> reply(session, msg, MsgType.GIFT_LIST_RES,
                     Map.of("gifts", giftService.listEnabled()));
+            // 建房参数可选档(后台可配,对齐扯旋 available_settle_time/available_base_scores)
+            case MsgType.ROOM_OPTIONS -> reply(session, msg, MsgType.ROOM_OPTIONS_RES, Map.of(
+                    "settleTimes", cfg.getLongList("room_settle_time_options", "30,45,60,90,120"),
+                    "blinds", cfg.getLongList("room_blind_options", "50,100,250,500,1000"),
+                    "opTimes", cfg.getLongList("room_op_time_options", "10,15,20,30"),
+                    "maxRates", cfg.getLongList("room_max_rate_options", "2,4,10"),
+                    "minTimes", cfg.getLongList("room_min_time_options", "0,30,60"),
+                    "rakePercents", cfg.getLongList("room_rake_percent_options", "0,3,5,10")));
             case MsgType.GIFT_SEND -> giftService.sendRoomGift(roomId, userId,
                     lng(data, "giftId", 0), lng(data, "toUserId", 0));
             case MsgType.MY_RECORDS -> {

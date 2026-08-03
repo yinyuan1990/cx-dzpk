@@ -7,9 +7,14 @@ const edits = ref({})
 const saving = ref({})
 const toast = ref('')
 
+// 「牌局参数」页有专用 UI 的键不在这里裸展示(建房档位 + 扣钻矩阵JSON)
+const HIDDEN_KEYS = new Set(['owner_period_diamond_tiers', 'owner_period_diamond_cost'])
+const HIDDEN_GROUPS = new Set(['建房参数'])
+
 const groups = computed(() => {
   const map = {}
   for (const c of configs.value) {
+    if (HIDDEN_KEYS.has(c.key) || HIDDEN_GROUPS.has(c.group)) continue
     ;(map[c.group] ||= []).push(c)
   }
   return map

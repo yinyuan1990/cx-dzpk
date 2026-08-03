@@ -28,6 +28,7 @@ public final class MsgType {
     public static final int DISMISS_ROOM = 416;        // 解散牌局(对齐扯旋130)
     public static final int GIFT_LIST = 417;           // 上架礼物列表(对齐扯旋 /api/gift/list)
     public static final int GIFT_SEND = 418;           // 房间送礼 {giftId, toUserId?}(对齐扯旋161)
+    public static final int ROOM_OPTIONS = 419;        // 建房参数可选档(时长/盲注/思考时间等,后台可配)
 
     // -------- 俱乐部(42x) --------
     public static final int CLUB_CREATE = 420;      // {name, notice?}
@@ -87,6 +88,7 @@ public final class MsgType {
     public static final int CLUB_SCORE_LOGS_RES = 489; // 积分流水 {logs:[...]}
     public static final int GIFT_LIST_RES = 490;       // 礼物列表 {gifts:[...]}
     public static final int ROOM_GIFT = 491;           // 房间礼物广播(对齐扯旋351) {fromUserId,fromSeat,toUserId?,toSeat?,giftKey,cost,...}
+    public static final int ROOM_OPTIONS_RES = 492;    // 建房参数可选档 {settleTimes,blinds,opTimes,maxRates,minTimes,rakePercents}
 
     public static final int ERROR = 499;
 }

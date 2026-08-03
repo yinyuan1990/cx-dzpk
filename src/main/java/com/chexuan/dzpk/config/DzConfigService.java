@@ -35,6 +35,13 @@ public class DzConfigService {
         DEFS.put("next_hand_delay_secs", new Def("4", "牌局", "一手结束到下一手开始的间隔(秒)"));
         DEFS.put("await_buyin_secs", new Def("10", "牌局", "周期结算/打光后补带入等待(秒),超时自动站起"));
         DEFS.put("insurance_timeout_secs", new Def("12", "牌局", "保险决策超时(秒)"));
+        // ---- 建房参数(可选档,逗号分隔;游戏端建房表单与钻石矩阵行列都由这两组派生,对齐扯旋v50/v51) ----
+        DEFS.put("room_settle_time_options", new Def("30,45,60,90,120", "建房参数", "可选结算时长(分钟,逗号分隔)"));
+        DEFS.put("room_blind_options", new Def("50,100,250,500,1000", "建房参数", "可选小盲(逗号分隔;大盲恒=小盲×2)"));
+        DEFS.put("room_op_time_options", new Def("10,15,20,30", "建房参数", "可选思考时间(秒,逗号分隔)"));
+        DEFS.put("room_max_rate_options", new Def("2,4,10", "建房参数", "可选最大带入倍数(带入上限=100大盲×倍数)"));
+        DEFS.put("room_min_time_options", new Def("0,30,60", "建房参数", "可选最短上桌时间(分钟,0=不限)"));
+        DEFS.put("room_rake_percent_options", new Def("0,3,5,10", "建房参数", "可选抽水比例%(对盈利抽)"));
         // ---- 留座暂离 ----
         DEFS.put("seat_reserve_grace_secs", new Def("300", "留座暂离", "放假倒计时(秒),每周期一次,超时自动站起"));
         DEFS.put("seat_lock_secs", new Def("480", "留座暂离", "放假超时站起后座位物理保留(秒)"));
@@ -128,6 +135,26 @@ public class DzConfigService {
         String v = cache.get(key);
         if (v == null) return def;
         return "1".equals(v.trim()) || "true".equalsIgnoreCase(v.trim());
+    }
+
+    /** 逗号分隔的数字档位列表(建房参数选项);非法项跳过,空/全非法时退回默认串解析 */
+    public List<Long> getLongList(String key, String def) {
+        List<Long> out = parseLongList(cache.getOrDefault(key, def));
+        return out.isEmpty() ? parseLongList(def) : out;
+    }
+
+    private static List<Long> parseLongList(String s) {
+        List<Long> out = new ArrayList<>();
+        if (s == null) return out;
+        for (String part : s.split("[,，\\s]+")) {
+            if (part.isBlank()) continue;
+            try {
+                out.add(Long.parseLong(part.trim()));
+            } catch (NumberFormatException ignore) {
+                // 跳过非法项
+            }
+        }
+        return out;
     }
 
     // ==================== 写(管理后台) ====================
