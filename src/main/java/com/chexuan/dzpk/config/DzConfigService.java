@@ -167,6 +167,9 @@ public class DzConfigService {
         }
         if (value == null) value = "";
         value = value.trim();
+        if (value.length() > 4000) {
+            throw new IllegalArgumentException("参数值过长(" + value.length() + " > 4000)");
+        }
         // 数字型参数简单校验
         if (def.defValue().matches("-?\\d+") && !value.matches("-?\\d+")) {
             throw new IllegalArgumentException("参数 " + key + " 需要整数值");

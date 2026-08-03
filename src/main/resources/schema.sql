@@ -95,10 +95,10 @@ CREATE INDEX idx_dz_diamond_user ON dz_diamond_log (user_id, created_at);
 
 -- 系统参数(对齐扯旋 system_config):启动播种默认值,管理后台在线调整,改了立即生效
 CREATE TABLE IF NOT EXISTS dz_system_config (
-    cfg_key     VARCHAR(64)  NOT NULL PRIMARY KEY,
-    cfg_value   VARCHAR(256) NOT NULL DEFAULT '',
-    remark      VARCHAR(256) NOT NULL DEFAULT '',
-    updated_at  DATETIME     NOT NULL
+    cfg_key     VARCHAR(64)   NOT NULL PRIMARY KEY,
+    cfg_value   VARCHAR(4096) NOT NULL DEFAULT '',
+    remark      VARCHAR(256)  NOT NULL DEFAULT '',
+    updated_at  DATETIME      NOT NULL
 );
 
 -- ============================================================
@@ -224,3 +224,5 @@ CREATE TABLE IF NOT EXISTS `user` (
 -- ============================================================
 ALTER TABLE dz_room ADD COLUMN club_id BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE dz_room ADD COLUMN rules_json VARCHAR(2048) NOT NULL DEFAULT '';
+-- 扣钻矩阵 JSON 超过 256:cfg_value 扩到 4096(旧库补;H2/MySQL 兼容 MODIFY)
+ALTER TABLE dz_system_config MODIFY cfg_value VARCHAR(4096) NOT NULL DEFAULT '';

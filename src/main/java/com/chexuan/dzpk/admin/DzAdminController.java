@@ -101,6 +101,11 @@ public class DzAdminController {
             return Map.of("code", 0, "key", key, "value", value);
         } catch (IllegalArgumentException e) {
             return Map.of("code", 1, "msg", e.getMessage());
+        } catch (Exception e) {
+            // 落库失败(超长/连接异常等)也回可读错误,不让前端吃 500
+            log.error("参数保存失败: key={}", key, e);
+            return Map.of("code", 1, "msg", "保存失败: " + e.getClass().getSimpleName()
+                    + (e.getMessage() != null ? " " + e.getMessage() : ""));
         }
     }
 
