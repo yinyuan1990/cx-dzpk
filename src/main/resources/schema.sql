@@ -56,6 +56,7 @@ CREATE TABLE IF NOT EXISTS dz_settle_record (
     id              BIGINT AUTO_INCREMENT PRIMARY KEY,
     room_id         BIGINT       NOT NULL,
     room_name       VARCHAR(64)  NOT NULL DEFAULT '',
+    club_id         BIGINT       NOT NULL DEFAULT 0,
     user_id         BIGINT       NOT NULL,
     nickname        VARCHAR(64)  NOT NULL DEFAULT '',
     period_seq      INT          NOT NULL DEFAULT 0,
@@ -231,6 +232,8 @@ ALTER TABLE dz_system_config MODIFY cfg_value VARCHAR(4096) NOT NULL DEFAULT '';
 -- 俱乐部简介/头像(对齐扯旋 CreateClubRequest,旧库补列)
 ALTER TABLE dz_club ADD COLUMN remark VARCHAR(100) NOT NULL DEFAULT '';
 ALTER TABLE dz_club ADD COLUMN avatar VARCHAR(255) NOT NULL DEFAULT '';
+-- 结算记录带俱乐部维度(俱乐部战绩弹框过滤用,旧库补列)
+ALTER TABLE dz_settle_record ADD COLUMN club_id BIGINT NOT NULL DEFAULT 0;
 
 -- ============================================================
 -- 独立账号体系(不再与扯旋主服混用;钻石也独立在本表 diamond 列)

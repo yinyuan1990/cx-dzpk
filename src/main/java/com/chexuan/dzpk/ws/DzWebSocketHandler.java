@@ -190,8 +190,19 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
                         m.put("rules", r.getRules().toMap());
                     }
                     int seated = 0;
-                    for (var p : r.getSeats()) if (p != null) seated++;
+                    // 已坐玩家快照(对齐扯旋 ClubTableItem 头像列)
+                    List<Map<String, Object>> players = new ArrayList<>();
+                    for (var p : r.getSeats()) {
+                        if (p == null) continue;
+                        seated++;
+                        players.add(Map.of("userId", p.getUserId(),
+                                "nickname", p.getNickname() == null ? "" : p.getNickname(),
+                                "avatar", p.getAvatar() == null ? "" : p.getAvatar(),
+                                "seat", p.getSeat()));
+                    }
                     m.put("seated", seated);
+                    m.put("players", players);
+                    m.put("creatorUserId", r.getCreatorUserId());
                     m.put("stage", r.getStage().name());
                     list.add(m);
                 }
@@ -305,9 +316,10 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
                     lng(data, "giftId", 0), lng(data, "toUserId", 0));
             case MsgType.MY_RECORDS -> {
                 int limit = (int) lng(data, "limit", 20);
+                long recClubId = lng(data, "clubId", 0); // >0 = 俱乐部维度战绩(对齐扯旋 gameSummary)
                 GameMessage res = GameMessage.create(MsgType.MY_RECORDS_RES, null, Map.of(
-                        "records", records.myRecords(userId, limit),
-                        "stats", records.myStats(userId)));
+                        "records", records.myRecords(userId, limit, recClubId),
+                        "stats", records.myStats(userId, recClubId)));
                 res.setSequence(msg.getSequence());
                 send(session, res);
             }
@@ -319,8 +331,13 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
                     Map.of("clubs", clubService.myClubs(userId)));
             case MsgType.CLUB_APPLY -> reply(session, msg, MsgType.CLUB_APPLY_RES,
                     clubService.apply(userId, nickname, lng(data, "code", 0)));
-            case MsgType.CLUB_APPLY_LIST -> reply(session, msg, MsgType.CLUB_APPLY_LIST_RES,
-                    Map.of("requests", clubService.applyList(lng(data, "clubId", 0), userId)));
+            case MsgType.CLUB_APPLY_LIST -> {
+                // clubId=0:聚合我管理的全部俱乐部待审(顶栏消息弹框,对齐扯旋 getAllMyClubsJoinRequests)
+                long applyClubId = lng(data, "clubId", 0);
+                reply(session, msg, MsgType.CLUB_APPLY_LIST_RES, Map.of("requests",
+                        applyClubId > 0 ? clubService.applyList(applyClubId, userId)
+                                        : clubService.applyListAll(userId)));
+            }
             case MsgType.CLUB_REVIEW -> {
                 long clubId = lng(data, "clubId", 0);
                 boolean approve = Boolean.TRUE.equals(data.get("approve")) || lng(data, "approve", 0) == 1;
@@ -370,6 +387,9 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
             case MsgType.CLUB_SCORE_LOGS -> reply(session, msg, MsgType.CLUB_SCORE_LOGS_RES,
                     Map.of("logs", clubService.scoreLogs(lng(data, "clubId", 0), userId,
                             lng(data, "userId", 0), (int) lng(data, "limit", 50))));
+            case MsgType.CLUB_UPDATE -> reply(session, msg, MsgType.CLUB_UPDATE_RES,
+                    clubService.updateClub(lng(data, "clubId", 0), userId,
+                            str(data, "name"), str(data, "remark"), str(data, "avatar"), str(data, "notice")));
             default -> send(session, err(msg, "未知命令 " + msg.getType()));
         }
     }

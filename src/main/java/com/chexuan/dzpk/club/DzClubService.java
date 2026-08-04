@@ -141,6 +141,39 @@ public class DzClubService {
         return m;
     }
 
+    /**
+     * 修改俱乐部资料(对齐扯旋 /user/updateClub:头像/名称/简介/公告,群主/管理员)。
+     * 校验口径与创建一致;公告可空(清空公告)≤200 字。
+     */
+    public Map<String, Object> updateClub(long clubId, long operatorId,
+                                          String name, String remark, String avatar, String notice) {
+        requireDb();
+        requireOwnerOrAdmin(clubId, operatorId);
+        if (name == null || name.isBlank()) throw new ClubException("俱乐部名称不能为空");
+        name = name.trim();
+        if (name.chars().allMatch(Character::isDigit)) throw new ClubException("俱乐部名称不能是纯数字");
+        int maxLen = cfg != null ? cfg.getInt("club_name_max_length", 4) : 4;
+        if (displayWidth(name) > maxLen * 2) throw new ClubException("俱乐部名称最长 " + maxLen + " 个汉字(或等宽字符)");
+        if (remark == null || remark.isBlank()) throw new ClubException("俱乐部简介不能为空");
+        remark = remark.trim();
+        if (remark.length() > 100) throw new ClubException("俱乐部简介不能超过100个字符");
+        if (avatar == null || avatar.isBlank()) throw new ClubException("请选择俱乐部头像");
+        if (avatar.length() > 255) throw new ClubException("头像地址过长");
+        notice = notice == null ? "" : notice.trim();
+        if (notice.length() > 200) throw new ClubException("公告不能超过200个字符");
+
+        jdbc.update("UPDATE dz_club SET name = ?, remark = ?, avatar = ?, notice = ? WHERE id = ? AND state = 1",
+                name, remark, avatar, notice, clubId);
+        log.info("修改俱乐部资料: clubId={}, operator={}, name={}", clubId, operatorId, name);
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("clubId", clubId);
+        m.put("name", name);
+        m.put("remark", remark);
+        m.put("avatar", avatar);
+        m.put("notice", notice);
+        return m;
+    }
+
     /** 显示宽度:CJK 等全角算 2,半角算 1(对齐扯旋 NicknameValidator 口径) */
     private static int displayWidth(String s) {
         int w = 0;
@@ -181,7 +214,7 @@ public class DzClubService {
     public List<Map<String, Object>> myClubs(long userId) {
         requireDb();
         return jdbc.query("SELECT c.id, c.club_no, c.name, c.remark, c.avatar, c.notice, c.creator_user_id, " +
-                        "m.role, m.invite_code, m.partner_rate, " +
+                        "m.role, m.invite_code, m.partner_rate, m.score, " +
                         "(SELECT COUNT(*) FROM dz_club_member x WHERE x.club_id = c.id AND x.status = 1) AS members, " +
                         "(SELECT COUNT(*) FROM dz_club_join_request r WHERE r.club_id = c.id AND r.status = 0) AS pendings " +
                         "FROM dz_club_member m JOIN dz_club c ON c.id = m.club_id " +
@@ -198,6 +231,7 @@ public class DzClubService {
                     m.put("myRole", rs.getInt("role"));
                     m.put("myInviteCode", rs.getLong("invite_code"));
                     m.put("myPartnerRate", rs.getInt("partner_rate"));
+                    m.put("myScore", rs.getLong("score")); // 我的俱乐部积分(对齐扯旋 memberScore)
                     m.put("memberCount", rs.getLong("members"));
                     // 待审数只透给能审批的人
                     m.put("pendingCount", rs.getInt("role") >= ROLE_ADMIN && rs.getInt("role") != ROLE_PARTNER
@@ -507,6 +541,33 @@ public class DzClubService {
                     m.put("time", rs.getTimestamp("created_at").getTime());
                     return m;
                 }, clubId);
+    }
+
+    /**
+     * 全部俱乐部待审聚合(对齐扯旋 /user/getAllMyClubsJoinRequests):
+     * 我是群主/管理员的所有俱乐部的待审申请,项带 clubId/clubName。顶栏消息弹框用。
+     */
+    public List<Map<String, Object>> applyListAll(long userId) {
+        requireDb();
+        return jdbc.query("SELECT r.id, r.club_id, c.name AS club_name, r.user_id, r.nickname, " +
+                        "r.code_type, r.inviter_user_id, r.created_at " +
+                        "FROM dz_club_join_request r " +
+                        "JOIN dz_club c ON c.id = r.club_id AND c.state = 1 " +
+                        "JOIN dz_club_member m ON m.club_id = r.club_id AND m.user_id = ? " +
+                        "  AND m.status = 1 AND m.role IN (" + ROLE_OWNER + "," + ROLE_ADMIN + ") " +
+                        "WHERE r.status = 0 ORDER BY r.id DESC",
+                (rs, i) -> {
+                    Map<String, Object> m = new LinkedHashMap<>();
+                    m.put("requestId", rs.getLong("id"));
+                    m.put("clubId", rs.getLong("club_id"));
+                    m.put("clubName", rs.getString("club_name"));
+                    m.put("userId", rs.getLong("user_id"));
+                    m.put("nickname", rs.getString("nickname"));
+                    m.put("codeType", rs.getInt("code_type"));
+                    m.put("inviterUserId", rs.getLong("inviter_user_id"));
+                    m.put("time", rs.getTimestamp("created_at").getTime());
+                    return m;
+                }, userId);
     }
 
     /** 审批(approve=true 同意)。返回申请人 userId(便于上层推送通知) */

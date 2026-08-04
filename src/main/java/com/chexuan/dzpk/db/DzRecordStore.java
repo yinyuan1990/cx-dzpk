@@ -120,11 +120,11 @@ public class DzRecordStore {
                                  long rake, long refund, long playedSecs) {
         if (jdbc == null) return;
         try {
-            jdbc.update("INSERT INTO dz_settle_record (room_id, room_name, user_id, nickname, period_seq, " +
+            jdbc.update("INSERT INTO dz_settle_record (room_id, room_name, club_id, user_id, nickname, period_seq, " +
                             "bring_in, final_stack, profit, rake, refund, hand_count, win_count, lose_count, " +
-                            "played_secs, reason, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    room.getRoomId(), room.getName(), p.getUserId(), p.getNickname(), p.getSettlePeriodSeq(),
-                    bringIn, finalStack, profit, rake, refund,
+                            "played_secs, reason, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    room.getRoomId(), room.getName(), room.getClubId(), p.getUserId(), p.getNickname(),
+                    p.getSettlePeriodSeq(), bringIn, finalStack, profit, rake, refund,
                     p.getHandCount(), p.getWinCount(), p.getLoseCount(), playedSecs, reason, now());
         } catch (Exception e) {
             log.error("dz_settle_record 写入失败: roomId={}, userId={}, reason={}",
@@ -136,16 +136,19 @@ public class DzRecordStore {
     // 查询(战绩页)
     // ================================================================
 
-    /** 我的战绩:最近 limit 条周期/站起结算 */
-    public List<Map<String, Object>> myRecords(long userId, int limit) {
+    /** 我的战绩:最近 limit 条周期/站起结算;clubId>0 = 只看该俱乐部(对齐扯旋 gameSummary) */
+    public List<Map<String, Object>> myRecords(long userId, int limit, long clubId) {
         if (jdbc == null) return List.of();
         try {
-            return jdbc.query("SELECT room_id, room_name, period_seq, bring_in, final_stack, profit, rake, " +
+            String clubCond = clubId > 0 ? " AND club_id = " + clubId : "";
+            return jdbc.query("SELECT room_id, room_name, club_id, period_seq, bring_in, final_stack, profit, rake, " +
                             "refund, hand_count, win_count, lose_count, played_secs, reason, created_at " +
-                            "FROM dz_settle_record WHERE user_id = ? ORDER BY id DESC LIMIT " + Math.min(limit, 100),
+                            "FROM dz_settle_record WHERE user_id = ?" + clubCond +
+                            " ORDER BY id DESC LIMIT " + Math.min(limit, 100),
                     (rs, i) -> {
                         Map<String, Object> m = new LinkedHashMap<>();
                         m.put("roomId", rs.getLong("room_id"));
+                        m.put("clubId", rs.getLong("club_id"));
                         m.put("roomName", rs.getString("room_name"));
                         m.put("periodSeq", rs.getInt("period_seq"));
                         m.put("bringIn", rs.getLong("bring_in"));
@@ -198,14 +201,17 @@ public class DzRecordStore {
         }
     }
 
-    /** 我的累计战绩:总场次/总盈亏/总手数/胜负 */
-    public Map<String, Object> myStats(long userId) {
+    /** 我的累计战绩:总场次/总盈亏/总手数/胜负;clubId>0 = 只看该俱乐部 */
+    public Map<String, Object> myStats(long userId, long clubId) {
         if (jdbc == null) return Map.of();
         try {
+            String clubCond = clubId > 0 ? " AND club_id = " + clubId : "";
             return jdbc.queryForObject("SELECT COUNT(*) AS sessions, COALESCE(SUM(profit),0) AS totalProfit, " +
                             "COALESCE(SUM(hand_count),0) AS totalHands, COALESCE(SUM(win_count),0) AS totalWins, " +
-                            "COALESCE(SUM(lose_count),0) AS totalLoses, COALESCE(SUM(rake),0) AS totalRake " +
-                            "FROM dz_settle_record WHERE user_id = ?",
+                            "COALESCE(SUM(lose_count),0) AS totalLoses, COALESCE(SUM(rake),0) AS totalRake, " +
+                            "COALESCE(SUM(CASE WHEN profit > 0 THEN 1 ELSE 0 END),0) AS winSessions, " +
+                            "COALESCE(SUM(CASE WHEN profit < 0 THEN 1 ELSE 0 END),0) AS loseSessions " +
+                            "FROM dz_settle_record WHERE user_id = ?" + clubCond,
                     (rs, i) -> {
                         Map<String, Object> m = new LinkedHashMap<>();
                         m.put("sessions", rs.getLong("sessions"));
@@ -214,6 +220,8 @@ public class DzRecordStore {
                         m.put("totalWins", rs.getLong("totalWins"));
                         m.put("totalLoses", rs.getLong("totalLoses"));
                         m.put("totalRake", rs.getLong("totalRake"));
+                        m.put("winSessions", rs.getLong("winSessions"));
+                        m.put("loseSessions", rs.getLong("loseSessions"));
                         return m;
                     }, userId);
         } catch (Exception e) {
