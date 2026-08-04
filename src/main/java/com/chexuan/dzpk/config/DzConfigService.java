@@ -42,6 +42,8 @@ public class DzConfigService {
         DEFS.put("room_max_rate_options", new Def("2,4,10", "建房参数", "可选最大带入倍数(带入上限=100大盲×倍数)"));
         DEFS.put("room_min_time_options", new Def("0,30,60", "建房参数", "可选最短上桌时间(分钟,0=不限)"));
         DEFS.put("room_rake_percent_options", new Def("0,3,5,10", "建房参数", "可选抽水比例%(对盈利抽)"));
+        DEFS.put("room_rake_max", new Def("5", "建房参数", "费率拖动条上限%(对齐Unity 0~5,大厅房强制0)"));
+        DEFS.put("room_in_rate_max", new Def("8", "建房参数", "带入倍数区间上限(对齐Unity双把手1~8)"));
         // GPS 防火牌(对齐扯旋 gps_min_distance_meters / gps_max_age_seconds)
         DEFS.put("gps_min_distance_m", new Def("100", "系统", "GPS防火牌:同桌玩家最小距离(米),开了GPS限制的桌坐下时校验"));
         DEFS.put("gps_max_age_secs", new Def("90", "系统", "GPS防火牌:定位数据最大有效期(秒),过期视为未上报"));
@@ -60,8 +62,11 @@ public class DzConfigService {
                         "例 [{\"minutes\":30,\"baseScore\":100,\"cost\":10},{\"minutes\":60,\"baseScore\":200,\"cost\":30}]"));
         DEFS.put("create_room_diamond_cost", new Def("0", "钻石", "创建房间扣创建者钻石(0=不扣)"));
         DEFS.put("create_club_diamond_cost", new Def("0", "钻石", "创建俱乐部扣钻石(0=不扣)"));
+        DEFS.put("register_init_diamond", new Def("0", "钻石", "新注册账号赠送钻石(独立账号体系,0=不送)"));
+        DEFS.put("register_nickname_max_length", new Def("4", "系统", "注册昵称最大长度(汉字宽度,对标扯旋)"));
         // ---- 俱乐部/钱包 ----
         DEFS.put("max_club_per_user", new Def("10", "俱乐部", "每人最多创建俱乐部数"));
+        DEFS.put("club_name_max_length", new Def("4", "俱乐部", "俱乐部名称最大长度(汉字宽度,半角字符算半个)"));
         DEFS.put("guest_init_balance", new Def("1000000", "钱包", "游客/新钱包初始金币"));
         // ---- 机器人 ----
         DEFS.put("robot_enabled", new Def("1", "机器人", "机器人陪打开关(1开0关)"));

@@ -238,7 +238,9 @@ public class DzGameService {
             }
             room.getMembers().remove(userId);
             broadcaster.toRoom(roomId, GameMessage.create(MsgType.PLAYER_LEAVE, roomId, Map.of("userId", userId)));
-            if (room.getMembers().isEmpty() && !room.inGame()) {
+            // 大厅散房(clubId=0)没人就销毁;俱乐部房对齐扯旋 WAITING 长期存活,
+            // 只走「最后一人站起条件自动解散」(maybeAutoDisbandClubRoom)或手动解散
+            if (room.getClubId() == 0 && room.getMembers().isEmpty() && !room.inGame()) {
                 roomManager.remove(roomId);
                 roomWorker.removeRoom(roomId);
                 records.markRoomClosed(roomId);
@@ -1557,6 +1559,36 @@ public class DzGameService {
         broadcaster.toRoom(room.getRoomId(), GameMessage.create(MsgType.PLAYER_STAND, room.getRoomId(), data));
         log.info("站起: roomId={}, userId={}, reason={}, bringIn={}, stack={}, profit={}, rake={}, fine={}, refund={}",
                 room.getRoomId(), p.getUserId(), reason, bringIn, stack, profit, rake, fine, refund);
+        maybeAutoDisbandClubRoom(room, reason);
+    }
+
+    /**
+     * 对齐扯旋 EMPTY_AUTO_DISBAND:最后一名在座玩家站起后,俱乐部房自动解散;
+     *   但同俱乐部同小盲还有其它桌才拆(保底留一桌入口),解散/维护等清房路径不触发(防递归)。
+     * 追加到 roomWorker 队尾执行:等 finishHand 等当前流程收尾、stage 回 WAITING 后再判。
+     */
+    private void maybeAutoDisbandClubRoom(DzRoom room, String reason) {
+        if (room.getClubId() <= 0) return;
+        switch (reason) {
+            case "standup", "leave", "grace_timeout", "vacation", "buyin_timeout" -> { }
+            default -> { return; }
+        }
+        long roomId = room.getRoomId();
+        roomWorker.submit(roomId, () -> {
+            if (roomManager.get(roomId) == null || room.inGame()) return;
+            for (DzPlayer q : room.getSeats()) {
+                if (q != null) return;
+            }
+            boolean hasOtherSameBlind = false;
+            for (DzRoom r : roomManager.list()) {
+                if (r.getRoomId() != roomId && r.getClubId() == room.getClubId() && r.getSb() == room.getSb()) {
+                    hasOtherSameBlind = true;
+                    break;
+                }
+            }
+            if (!hasOtherSameBlind) return;  // 同小盲最后一桌保留,俱乐部大厅始终有入口
+            forceClearRoom(room, 0, "empty_auto");
+        });
     }
 
     /** 主动离开的站起原因(罚金只对主动离开生效,对齐扯旋 StandUpReason.isUserInitiated) */

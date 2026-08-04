@@ -110,6 +110,8 @@ CREATE TABLE IF NOT EXISTS dz_club (
     id              BIGINT AUTO_INCREMENT PRIMARY KEY,
     club_no         BIGINT       NOT NULL,
     name            VARCHAR(32)  NOT NULL,
+    remark          VARCHAR(100) NOT NULL DEFAULT '',
+    avatar          VARCHAR(255) NOT NULL DEFAULT '',
     notice          VARCHAR(256) NOT NULL DEFAULT '',
     creator_user_id BIGINT       NOT NULL,
     state           TINYINT      NOT NULL DEFAULT 1,
@@ -226,3 +228,29 @@ ALTER TABLE dz_room ADD COLUMN club_id BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE dz_room ADD COLUMN rules_json VARCHAR(2048) NOT NULL DEFAULT '';
 -- 扣钻矩阵 JSON 超过 256:cfg_value 扩到 4096(旧库补;H2/MySQL 兼容 MODIFY)
 ALTER TABLE dz_system_config MODIFY cfg_value VARCHAR(4096) NOT NULL DEFAULT '';
+-- 俱乐部简介/头像(对齐扯旋 CreateClubRequest,旧库补列)
+ALTER TABLE dz_club ADD COLUMN remark VARCHAR(100) NOT NULL DEFAULT '';
+ALTER TABLE dz_club ADD COLUMN avatar VARCHAR(255) NOT NULL DEFAULT '';
+
+-- ============================================================
+-- 独立账号体系(不再与扯旋主服混用;钻石也独立在本表 diamond 列)
+-- ============================================================
+-- 注册字段对标扯旋 RegisterRequest:phone/username(昵称)/avatar/password/confirmPassword/
+--   inviteCode(可选)/registerDevice(1=iOS 2=Android 3=Web);number_id=6位唯一编号(对标 numberId)
+CREATE TABLE IF NOT EXISTS dz_user (
+    id              BIGINT AUTO_INCREMENT PRIMARY KEY,
+    phone           VARCHAR(20)  NOT NULL,
+    number_id       VARCHAR(8)   NOT NULL DEFAULT '',
+    password_hash   VARCHAR(128) NOT NULL,
+    salt            VARCHAR(32)  NOT NULL,
+    nickname        VARCHAR(32)  NOT NULL,
+    avatar          VARCHAR(255) NOT NULL DEFAULT '',
+    invite_code     VARCHAR(32)  NOT NULL DEFAULT '',
+    register_device TINYINT      NOT NULL DEFAULT 1,
+    diamond         BIGINT       NOT NULL DEFAULT 0,
+    state           TINYINT      NOT NULL DEFAULT 1,
+    created_at      DATETIME     NOT NULL,
+    last_login_at   DATETIME     NULL
+);
+CREATE UNIQUE INDEX idx_dz_user_phone ON dz_user (phone);
+CREATE INDEX idx_dz_user_number ON dz_user (number_id);

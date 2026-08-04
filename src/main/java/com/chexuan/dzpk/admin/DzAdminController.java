@@ -34,6 +34,8 @@ public class DzAdminController {
     private final DzGameService gameService;
     private final WsSessionRegistry registry;
     private final com.chexuan.dzpk.gift.DzGiftService giftService;
+    private final com.chexuan.dzpk.db.DiamondService diamondService;
+    private final org.springframework.jdbc.core.JdbcTemplate jdbc;
 
     /** token → 过期时间戳 */
     private final Map<String, Long> tokens = new ConcurrentHashMap<>();
@@ -43,12 +45,16 @@ public class DzAdminController {
 
     public DzAdminController(DzConfigService configService, DzRoomManager roomManager,
                              DzGameService gameService, WsSessionRegistry registry,
-                             com.chexuan.dzpk.gift.DzGiftService giftService) {
+                             com.chexuan.dzpk.gift.DzGiftService giftService,
+                             com.chexuan.dzpk.db.DiamondService diamondService,
+                             org.springframework.jdbc.core.JdbcTemplate jdbc) {
         this.configService = configService;
         this.roomManager = roomManager;
         this.gameService = gameService;
         this.registry = registry;
         this.giftService = giftService;
+        this.diamondService = diamondService;
+        this.jdbc = jdbc;
     }
 
     // ==================== 登录 ====================
@@ -135,6 +141,49 @@ public class DzAdminController {
         if (!authed(token)) return deny();
         giftService.delete(id);
         return Map.of("code", 0);
+    }
+
+    // ==================== 用户/钻石(独立账号体系,钻石来源=后台充值) ====================
+
+    /** 用户查询:q 为手机号(精确)或 userId */
+    @GetMapping("/users")
+    public Map<String, Object> users(@RequestHeader(value = "X-Admin-Token", required = false) String token,
+                                     @RequestParam(value = "q", required = false) String q) {
+        if (!authed(token)) return deny();
+        String sql = "SELECT id, phone, nickname, avatar, diamond, state, created_at, last_login_at FROM dz_user ";
+        List<Map<String, Object>> rows;
+        if (q != null && !q.isBlank()) {
+            rows = jdbc.queryForList(sql + "WHERE phone = ? OR id = ? ORDER BY id DESC LIMIT 50",
+                    q.trim(), parseLongOr(q.trim(), -1));
+        } else {
+            rows = jdbc.queryForList(sql + "ORDER BY id DESC LIMIT 50");
+        }
+        return Map.of("code", 0, "users", rows);
+    }
+
+    /** 充/扣钻石:{userId, amount(正充负扣), remark?} */
+    @PostMapping("/users/diamond")
+    public Map<String, Object> adjustDiamond(@RequestHeader(value = "X-Admin-Token", required = false) String token,
+                                             @RequestBody Map<String, Object> body) {
+        if (!authed(token)) return deny();
+        long userId = parseLongOr(String.valueOf(body.get("userId")), 0);
+        long amount = parseLongOr(String.valueOf(body.get("amount")), 0);
+        String remark = String.valueOf(body.getOrDefault("remark", "后台调整"));
+        if (userId <= 0 || amount == 0) return Map.of("code", 1, "msg", "userId/amount 非法");
+        boolean ok = amount > 0
+                ? diamondService.credit(userId, amount, "admin_adjust", remark)
+                : diamondService.debit(userId, -amount, "admin_adjust", remark);
+        if (!ok) return Map.of("code", 1, "msg", "调整失败(账号不存在或余额不足)");
+        log.info("后台钻石调整: userId={}, amount={}, remark={}", userId, amount, remark);
+        return Map.of("code", 0, "userId", userId, "diamond", diamondService.balance(userId));
+    }
+
+    private static long parseLongOr(String s, long def) {
+        try {
+            return Long.parseLong(s);
+        } catch (Exception e) {
+            return def;
+        }
     }
 
     // ==================== 监控 ====================

@@ -47,7 +47,7 @@ class DzClubServiceTest {
 
     /** 建一个俱乐部:群主 + 管理员 + 合伙人A(rate30,挂群主) + 合伙人B(rate50,挂A) + 成员(挂B) */
     private long buildClub() {
-        long clubId = (long) clubs.createClub(OWNER, "群主", "测试俱乐部", "").get("clubId");
+        long clubId = (long) clubs.createClub(OWNER, "群主", "测试部", "单测用简介", "club.png").get("clubId");
         joinVia(clubId, ADMIN, "管理员", clubNo(clubId));
         clubs.setRole(clubId, OWNER, ADMIN, DzClubService.ROLE_ADMIN, 0);
         joinVia(clubId, PARTNER_A, "合伙人A", inviteCodeOf(clubId, OWNER));
@@ -76,7 +76,7 @@ class DzClubServiceTest {
 
     @Test
     void 创建俱乐部_六位编号_群主入座() {
-        Map<String, Object> res = clubs.createClub(OWNER, "群主", "我的俱乐部", "公告");
+        Map<String, Object> res = clubs.createClub(OWNER, "群主", "德州之家", "简介", "club.png");
         long no = (long) res.get("clubNo");
         assertTrue(no >= 100000 && no <= 999999, "6位编号");
         Map<String, Object> me = clubs.member((long) res.get("clubId"), OWNER);
@@ -88,10 +88,10 @@ class DzClubServiceTest {
     @Test
     void 创建数量上限() {
         ReflectionTestUtils.setField(clubs, "maxClubPerUser", 2);
-        clubs.createClub(OWNER, "群主", "一号", "");
-        clubs.createClub(OWNER, "群主", "二号", "");
+        clubs.createClub(OWNER, "群主", "一号", "简介", "club.png");
+        clubs.createClub(OWNER, "群主", "二号", "简介", "club.png");
         assertThrows(DzClubService.ClubException.class,
-                () -> clubs.createClub(OWNER, "群主", "三号", ""));
+                () -> clubs.createClub(OWNER, "群主", "三号", "简介", "club.png"));
     }
 
     @Test

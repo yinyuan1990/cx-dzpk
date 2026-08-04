@@ -8,22 +8,20 @@ import org.springframework.stereotype.Service;
 import java.sql.Timestamp;
 
 /**
- * 钻石(全平台公用货币) — 本体在主库 user.diamond,不在德州自己库里记账本。
- * 同一 MySQL 实例跨库直达:dzpk.diamond-user-table 生产配 chexuan_game.user,
- * 扣减用「UPDATE ... WHERE diamond >= ?」原子条件更新,与主服并发安全;
- * 德州侧变动记 dz_diamond_log 流水。
- * 游客/机器人(id >= 8亿)没有主服账号,一律余额 0、不可扣。
+ * 钻石 — 德州独立货币,本体在本库 dz_user.diamond(账号体系已与扯旋脱钩,后续联动另说)。
+ * 扣减用「UPDATE ... WHERE diamond >= ?」原子条件更新;变动记 dz_diamond_log 流水。
+ * 游客/机器人(id >= 8亿)没有账号,一律余额 0、不可扣。
  */
 @Slf4j
 @Service
 public class DiamondService {
 
-    /** 8亿以上是德州本地 id 段(机器人 8亿/游客 9亿),主服无此账号 */
+    /** 8亿以上是临时 id 段(机器人 8亿/游客 9亿),dz_user 无此账号 */
     public static final long LOCAL_ID_BASE = 800_000_000L;
 
     private final JdbcTemplate jdbc;
 
-    @Value("${dzpk.diamond-user-table:`user`}")
+    @Value("${dzpk.diamond-user-table:dz_user}")
     private String userTable;
 
     public DiamondService(JdbcTemplate jdbc) {

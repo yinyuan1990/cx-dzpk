@@ -41,6 +41,7 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
 
     private final ObjectMapper objectMapper;
     private final JwtVerifier jwtVerifier;
+    private final com.chexuan.dzpk.auth.DzUserService userService;
     private final WsSessionRegistry registry;
     private final DzGameService gameService;
     private final DzRoomManager roomManager;
@@ -65,9 +66,11 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
                               DiamondService diamondService, DzRecordStore records,
                               DzClubService clubService, com.chexuan.dzpk.config.DzConfigService cfg,
                               com.chexuan.dzpk.gift.DzGiftService giftService,
-                              com.chexuan.dzpk.game.service.GpsService gpsService) {
+                              com.chexuan.dzpk.game.service.GpsService gpsService,
+                              com.chexuan.dzpk.auth.DzUserService userService) {
         this.objectMapper = objectMapper;
         this.jwtVerifier = jwtVerifier;
+        this.userService = userService;
         this.registry = registry;
         this.gameService = gameService;
         this.roomManager = roomManager;
@@ -117,6 +120,7 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
         Map<String, Object> data = dataMap(msg);
         Long userId = null;
         String nickname = null;
+        String avatar = "";
 
         String token = str(data, "token");
         if (token != null && !token.isBlank()) {
@@ -125,8 +129,14 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
                 send(session, err(msg, "token 无效或已过期"));
                 return;
             }
-            nickname = str(data, "nickname");
-            if (nickname == null) nickname = "玩家" + userId;
+            // 独立账号:昵称/头像以本地 dz_user 为准,不信客户端传值
+            Map<String, Object> prof = userService.profile(userId);
+            if (prof == null) {
+                send(session, err(msg, "账号不存在或已被封禁"));
+                return;
+            }
+            nickname = (String) prof.get("nickname");
+            avatar = (String) prof.get("avatar");
         } else if (cfg.getBool("allow_guest", allowGuest) && str(data, "guest") != null) {
             userId = guestIdGen.getAndIncrement();
             nickname = str(data, "guest");
@@ -137,9 +147,6 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
 
         session.getAttributes().put(ATTR_USER_ID, userId);
         session.getAttributes().put(ATTR_NICKNAME, nickname);
-        // 头像:主服账号从主库带出(注册/改资料都在主服);游客无
-        String avatar = diamondService.avatar(userId);
-        if (avatar == null) avatar = "";
         session.getAttributes().put(ATTR_AVATAR, avatar);
         registry.bind(userId, session);
 
@@ -213,6 +220,20 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
                     send(session, err(msg, "小盲 " + rules.getSb() + " 不在可选档内"));
                     return;
                 }
+                // 费率拖动条(对齐 Unity):俱乐部房 0~rakeMax,大厅房强制 0
+                long rakeMax = cfg.getLong("room_rake_max", 5);
+                if (rules.getClubId() <= 0) {
+                    rules.setRakePercent(0);
+                } else if (rules.getRakePercent() > rakeMax) {
+                    send(session, err(msg, "费率最高 " + rakeMax + "%"));
+                    return;
+                }
+                // 带入倍数区间上限(对齐 Unity 双把手 1~8)
+                long inRateMax = cfg.getLong("room_in_rate_max", 8);
+                if (rules.getInMaxRate() > inRateMax) {
+                    send(session, err(msg, "带入倍数最高 " + inRateMax + " 倍"));
+                    return;
+                }
                 // 俱乐部房:仅群主/管理员可建(对齐扯旋)
                 if (rules.getClubId() > 0 && !clubService.canCreateRoom(rules.getClubId(), userId)) {
                     send(session, err(msg, "需要群主/管理员权限才能创建俱乐部牌局"));
@@ -273,7 +294,10 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
                     "opTimes", cfg.getLongList("room_op_time_options", "10,15,20,30"),
                     "maxRates", cfg.getLongList("room_max_rate_options", "2,4,10"),
                     "minTimes", cfg.getLongList("room_min_time_options", "0,30,60"),
-                    "rakePercents", cfg.getLongList("room_rake_percent_options", "0,3,5,10")));
+                    "rakePercents", cfg.getLongList("room_rake_percent_options", "0,3,5,10"),
+                    // 对齐 Unity:费率拖动条 0~rakeMax(大厅房强制0);带入倍数双把手区间 1~inRateMax
+                    "rakeMax", cfg.getLong("room_rake_max", 5),
+                    "inRateMax", cfg.getLong("room_in_rate_max", 8)));
             case MsgType.GIFT_SEND -> giftService.sendRoomGift(roomId, userId,
                     lng(data, "giftId", 0), lng(data, "toUserId", 0));
             case MsgType.MY_RECORDS -> {
@@ -286,7 +310,8 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
             }
             // ==================== 俱乐部 ====================
             case MsgType.CLUB_CREATE -> reply(session, msg, MsgType.CLUB_CREATE_RES,
-                    clubService.createClub(userId, nickname, str(data, "name"), str(data, "notice")));
+                    clubService.createClub(userId, nickname,
+                            str(data, "name"), str(data, "remark"), str(data, "avatar")));
             case MsgType.CLUB_LIST -> reply(session, msg, MsgType.CLUB_LIST_RES,
                     Map.of("clubs", clubService.myClubs(userId)));
             case MsgType.CLUB_APPLY -> reply(session, msg, MsgType.CLUB_APPLY_RES,

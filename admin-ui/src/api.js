@@ -43,4 +43,6 @@ export const api = {
   gifts: () => req('GET', '/gifts'),
   saveGift: (gift) => req('PUT', '/gifts', gift),
   deleteGift: (id) => req('DELETE', `/gifts/${id}`),
+  users: (q) => req('GET', '/users' + (q ? `?q=${encodeURIComponent(q)}` : '')),
+  adjustDiamond: (userId, amount, remark) => req('POST', '/users/diamond', { userId, amount, remark }),
 }

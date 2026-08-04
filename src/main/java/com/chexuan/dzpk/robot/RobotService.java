@@ -161,6 +161,8 @@ public class RobotService {
     private synchronized void fillCheck(long roomId) {
         DzRoom room = roomManager.get(roomId);
         if (room == null) return;
+        // 俱乐部房不进机器人:仅成员可坐(对齐扯旋,机器人陪打只服务大厅散房)
+        if (room.getClubId() > 0) return;
 
         Set<Long> robots = roomRobots.computeIfAbsent(roomId, k -> ConcurrentHashMap.newKeySet());
         Set<Integer> reserved = reservedSeats.computeIfAbsent(roomId, k -> ConcurrentHashMap.newKeySet());

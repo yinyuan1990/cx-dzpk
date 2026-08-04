@@ -2,13 +2,10 @@ spring:
   application:
     name: chexuan-dzpk
 
-  # 数据库 — 战绩/结算/钱包落库 + 钻石公用。
-  # 架构:每个子游戏独立一个库(德州=cx_dzpk),与主库 chexuan_game 同一 MySQL 实例;
-  #   钻石本体在主库 user.diamond,德州跨库原子扣减(见 dzpk.diamond-user-table)。
+  # 数据库 — 独立库 cx_dzpk:账号(dz_user)/钻石/战绩/钱包全部本库,与扯旋完全独立。
   # 开发默认 H2 内存库(MODE=MySQL,零配置起服);生产用环境变量覆盖:
   #   SPRING_DATASOURCE_URL=jdbc:mysql://mysql:3306/cx_dzpk?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&createDatabaseIfNotExist=true
   #   SPRING_DATASOURCE_USERNAME=root  SPRING_DATASOURCE_PASSWORD=***
-  #   DZPK_DIAMOND_USER_TABLE=chexuan_game.user
   datasource:
     url: jdbc:h2:mem:dzpk;MODE=MySQL;DB_CLOSE_DELAY=-1
     username: sa
@@ -31,8 +28,10 @@ server:
 # 德州子游戏服务配置
 # ========================================
 dzpk:
-  # 与主服(chexuan-springboot JwtUtil)相同的 JWT 密钥,本地验签,不回主服校验
-  jwt-secret: "ChexuanGame2025SecretKeyForJWT123456"
+  # 独立账号体系:本服自签自验 JWT(与扯旋主服无关);生产用环境变量覆盖成独立密钥
+  jwt-secret: "CxDzpk2026IndependentJwtSecretKey9100"
+  # token 有效期(天)
+  jwt-expire-days: 7
   # 开发模式:允许无 token 的游客登录(guest:昵称),联调用;上线关掉
   allow-guest: true
   # 玩家行动思考时间(秒),老德州 room.xml opTime 默认 15,+3 秒网络余量在前端做
@@ -71,12 +70,11 @@ dzpk:
     max-delay-ms: 2500
   # 游客/新钱包初始金币(dz_user_wallet 首次访问时的初始余额;上线接主服积分后置 0)
   guest-init-balance: 1000000
-  # 创建房间扣钻石(主库 user.diamond,原子扣减 + dz_diamond_log 流水);0=不扣。
-  # 游客/机器人(id>=8亿)没有主服账号,不扣。
+  # 创建房间扣钻石(dz_user.diamond,原子扣减 + dz_diamond_log 流水);0=不扣。
+  # 游客/机器人(id>=8亿)没有账号,不扣。
   create-room-diamond-cost: 0
-  # 钻石所在的用户表(钻石公用核心):开发 H2 用本库最小 user 表;
-  # 生产配 chexuan_game.user 跨库直达主服钻石。
-  diamond-user-table: "`user`"
+  # 钻石所在的用户表:独立账号体系固定 dz_user(账号与钻石都在本库)
+  diamond-user-table: "dz_user"
   # 创建俱乐部扣钻石(扯旋普通俱乐部 200 钻);0=不扣
   create-club-diamond-cost: 0
   # 每人最多创建俱乐部数(对齐扯旋默认 10)

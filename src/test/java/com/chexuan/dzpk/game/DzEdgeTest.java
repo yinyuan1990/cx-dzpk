@@ -338,7 +338,7 @@ class DzEdgeTest {
         env.game = new DzGameService(roomManager, roomWorker, env.wallet, env.bc, env.clubs);
         config(env.game);
 
-        env.clubId = (long) env.clubs.createClub(env.owner, "群主", "边缘测试部", "").get("clubId");
+        env.clubId = (long) env.clubs.createClub(env.owner, "群主", "边缘部", "简介", "club.png").get("clubId");
         long clubNo = jdbc.queryForObject("SELECT club_no FROM dz_club WHERE id=?", Long.class, env.clubId);
         for (long uid : new long[]{env.member1, env.member2}) {
             env.clubs.apply(uid, "成员" + uid, clubNo);

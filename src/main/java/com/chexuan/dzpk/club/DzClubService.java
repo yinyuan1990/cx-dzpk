@@ -84,11 +84,24 @@ public class DzClubService {
     // 创建
     // ================================================================
 
-    /** 创建俱乐部,返回 {clubId, clubNo, name, myInviteCode} */
-    public Map<String, Object> createClub(long userId, String nickname, String name, String notice) {
+    /**
+     * 创建俱乐部(参数对齐扯旋 CreateClubRequest:名称+简介+头像,公告创建时强制空串):
+     *   名称:显示宽度 ≤ club_name_max_length×2(汉字宽2/半角宽1,默认4汉字宽),禁纯数字;
+     *   简介:必填 ≤100 字;头像:必填(URL/标识)。
+     * 返回 {clubId, clubNo, name, myInviteCode, diamondCost, diamond}
+     */
+    public Map<String, Object> createClub(long userId, String nickname, String name, String remark, String avatar) {
         requireDb();
         if (name == null || name.isBlank()) throw new ClubException("俱乐部名称不能为空");
-        if (name.length() > 16) throw new ClubException("俱乐部名称过长");
+        name = name.trim();
+        if (name.chars().allMatch(Character::isDigit)) throw new ClubException("俱乐部名称不能是纯数字");
+        int maxLen = cfg != null ? cfg.getInt("club_name_max_length", 4) : 4;
+        if (displayWidth(name) > maxLen * 2) throw new ClubException("俱乐部名称最长 " + maxLen + " 个汉字(或等宽字符)");
+        if (remark == null || remark.isBlank()) throw new ClubException("俱乐部简介不能为空");
+        remark = remark.trim();
+        if (remark.length() > 100) throw new ClubException("俱乐部简介不能超过100个字符");
+        if (avatar == null || avatar.isBlank()) throw new ClubException("请选择俱乐部头像");
+        if (avatar.length() > 255) throw new ClubException("头像地址过长");
         Integer cnt = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM dz_club WHERE creator_user_id = ? AND state <> 2", Integer.class, userId);
         if (cnt != null && cnt >= clubLimit()) throw new ClubException("最多创建 " + clubLimit() + " 个俱乐部");
@@ -103,9 +116,10 @@ public class DzClubService {
         }
 
         long clubNo = uniqueNo("SELECT COUNT(*) FROM dz_club WHERE club_no = ? AND state <> 2");
-        jdbc.update("INSERT INTO dz_club (club_no, name, notice, creator_user_id, state, diamond_cost, created_at) " +
-                        "VALUES (?,?,?,?,1,?,?)",
-                clubNo, name.trim(), notice == null ? "" : notice, userId, cost, now());
+        // 公告创建时强制空串(对齐扯旋:公告只能建后走更新)
+        jdbc.update("INSERT INTO dz_club (club_no, name, remark, avatar, notice, creator_user_id, state, diamond_cost, created_at) " +
+                        "VALUES (?,?,?,?,'',?,1,?,?)",
+                clubNo, name, remark, avatar, userId, cost, now());
         Long clubId = jdbc.queryForObject("SELECT id FROM dz_club WHERE club_no = ? AND creator_user_id = ? " +
                 "ORDER BY id DESC LIMIT 1", Long.class, clubNo, userId);
 
@@ -118,11 +132,24 @@ public class DzClubService {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("clubId", clubId);
         m.put("clubNo", clubNo);
-        m.put("name", name.trim());
+        m.put("name", name);
+        m.put("remark", remark);
+        m.put("avatar", avatar);
         m.put("myInviteCode", inviteCode);
         m.put("diamondCost", cost);
         m.put("diamond", diamondService.balance(userId));
         return m;
+    }
+
+    /** 显示宽度:CJK 等全角算 2,半角算 1(对齐扯旋 NicknameValidator 口径) */
+    private static int displayWidth(String s) {
+        int w = 0;
+        for (int i = 0; i < s.length(); ) {
+            int cp = s.codePointAt(i);
+            w += cp > 0xFF ? 2 : 1;
+            i += Character.charCount(cp);
+        }
+        return w;
     }
 
     /** 6 位唯一编号(100000-999999) */
@@ -153,7 +180,7 @@ public class DzClubService {
     /** 我加入的俱乐部列表 */
     public List<Map<String, Object>> myClubs(long userId) {
         requireDb();
-        return jdbc.query("SELECT c.id, c.club_no, c.name, c.notice, c.creator_user_id, " +
+        return jdbc.query("SELECT c.id, c.club_no, c.name, c.remark, c.avatar, c.notice, c.creator_user_id, " +
                         "m.role, m.invite_code, m.partner_rate, " +
                         "(SELECT COUNT(*) FROM dz_club_member x WHERE x.club_id = c.id AND x.status = 1) AS members, " +
                         "(SELECT COUNT(*) FROM dz_club_join_request r WHERE r.club_id = c.id AND r.status = 0) AS pendings " +
@@ -164,6 +191,8 @@ public class DzClubService {
                     m.put("clubId", rs.getLong("id"));
                     m.put("clubNo", rs.getLong("club_no"));
                     m.put("name", rs.getString("name"));
+                    m.put("remark", rs.getString("remark"));
+                    m.put("avatar", rs.getString("avatar"));
                     m.put("notice", rs.getString("notice"));
                     m.put("ownerUserId", rs.getLong("creator_user_id"));
                     m.put("myRole", rs.getInt("role"));
