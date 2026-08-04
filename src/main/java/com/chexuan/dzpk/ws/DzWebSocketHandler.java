@@ -121,6 +121,7 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
         Long userId = null;
         String nickname = null;
         String avatar = "";
+        String numberId = "";
 
         String token = str(data, "token");
         if (token != null && !token.isBlank()) {
@@ -137,6 +138,7 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
             }
             nickname = (String) prof.get("nickname");
             avatar = (String) prof.get("avatar");
+            numberId = String.valueOf(prof.getOrDefault("numberId", ""));
         } else if (cfg.getBool("allow_guest", allowGuest) && str(data, "guest") != null) {
             userId = guestIdGen.getAndIncrement();
             nickname = str(data, "guest");
@@ -152,6 +154,7 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
 
         GameMessage res = GameMessage.create(MsgType.LOGIN_RES, null, Map.of(
                 "userId", userId, "nickname", nickname, "avatar", avatar,
+                "numberId", numberId,
                 "balance", walletService.balance(userId),
                 "diamond", diamondService.balance(userId)));
         res.setSequence(msg.getSequence());

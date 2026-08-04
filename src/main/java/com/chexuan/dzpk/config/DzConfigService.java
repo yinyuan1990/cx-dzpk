@@ -64,6 +64,7 @@ public class DzConfigService {
         DEFS.put("create_club_diamond_cost", new Def("0", "钻石", "创建俱乐部扣钻石(0=不扣)"));
         DEFS.put("register_init_diamond", new Def("0", "钻石", "新注册账号赠送钻石(独立账号体系,0=不送)"));
         DEFS.put("register_nickname_max_length", new Def("4", "系统", "注册昵称最大长度(汉字宽度,对标扯旋)"));
+        DEFS.put("share_app_url", new Def("http://47.122.115.33:19100/", "系统", "APP分享地址(顶栏分享按钮分享/复制的链接)"));
         // ---- 俱乐部/钱包 ----
         DEFS.put("max_club_per_user", new Def("10", "俱乐部", "每人最多创建俱乐部数"));
         DEFS.put("club_name_max_length", new Def("4", "俱乐部", "俱乐部名称最大长度(汉字宽度,半角字符算半个)"));
