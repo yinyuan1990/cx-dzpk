@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
-"""端到端冒烟(生产):建俱乐部房 → 真人B坐下 → 管理台一键生成机器人 → 机器人入座并开局"""
+"""端到端冒烟(生产,对齐扯旋机器人模型):
+一键生成机器人账号池(与牌局无关,入会+上分) → 建俱乐部房 → 真人B坐下 →
+派机器人上桌(带入扣自己俱乐部积分) → 自动开局 → 撤回(账号留池)"""
 import json, time, random, struct, socket, base64, urllib.request
 
 HOST, PORT = "47.122.115.33", 19100
@@ -109,8 +111,6 @@ def check(name, cond, extra=""):
     print("PASS", name, extra)
 
 
-ROBOT_ID_BASE = 800_000_001
-
 # ===== 管理台登录 =====
 adm = http("/api/admin/login", {"password": "dz@admin2026"})
 assert adm.get("code") == 0, adm
@@ -141,6 +141,17 @@ a.wait(486)
 a.send(430, {"clubId": clubId, "op": "distribute", "userId": infoB["userId"], "amount": 60000})
 a.wait(486)
 
+# ===== 一键生成机器人账号池(与牌局无关) =====
+r = http(f"/api/admin/clubs/{clubId}/robots/generate", {"count": 2, "initScore": 500000}, tok)
+check("一键生成机器人", r.get("code") == 0 and r.get("created") == 2, json.dumps(r))
+robot_ids = set(r["userIds"])
+
+r = http_get(f"/api/admin/clubs/{clubId}/robots", tok)
+bots0 = r.get("robots", [])
+check("机器人池列表", len(bots0) == 2 and all(not b["inRoom"] for b in bots0),
+      json.dumps(bots0, ensure_ascii=False)[:160])
+check("机器人初始积分已上", all(b["score"] == 500000 for b in bots0))
+
 # ===== A 建俱乐部房(6人),B 进房坐下带入 =====
 a.send(403, {"clubId": clubId, "sb": 100, "maxPlayers": 6, "settleTimeMins": 30})
 room = a.wait(453)["data"]
@@ -151,9 +162,9 @@ b.wait(454)
 b.send(406, {"seat": 0, "buyin": 20000}, roomId)
 b.wait(456)
 
-# ===== 一键生成 2 个机器人 =====
+# ===== 派机器人上桌 =====
 r = http("/api/admin/robots/spawn", {"roomId": roomId, "count": 2}, tok)
-check("spawn 接口", r.get("code") == 0 and r.get("spawned") == 2, json.dumps(r))
+check("派桌接口", r.get("code") == 0 and r.get("deployed") == 2, json.dumps(r))
 
 time.sleep(4)  # 等机器人坐下带入 + 自动开局
 
@@ -161,18 +172,27 @@ ov = http_get("/api/admin/overview", tok)
 rooms = {x["roomId"]: x for x in ov.get("rooms", [])}
 rm = rooms.get(roomId)
 assert rm, f"overview 里没有房间 {roomId}"
-bots = [p for p in rm["players"] if p["userId"] >= ROBOT_ID_BASE]
+bots = [p for p in rm["players"] if p["userId"] in robot_ids]
 check("机器人已入座", len(bots) == 2, json.dumps(bots, ensure_ascii=False))
 check("机器人已带入筹码", all(p["stack"] > 0 for p in bots), json.dumps([p["stack"] for p in bots]))
 check("牌局已自动开始", rm["stage"] != "WAITING", f"stage={rm['stage']} hand={rm['handNo']}")
 
-# robots 列表
-r = http_get("/api/admin/robots", tok)
-check("robots 列表", r.get("rooms", {}).get(str(roomId)) == 2, json.dumps(r))
+# 带入扣了真实俱乐部积分(池列表 score 应减少且 inRoom=true)
+r = http_get(f"/api/admin/clubs/{clubId}/robots", tok)
+bots1 = r.get("robots", [])
+check("带入扣真实积分+在桌标记", all(b["inRoom"] and b["score"] < 500000 for b in bots1),
+      json.dumps([{k: b[k] for k in ('score', 'inRoom')} for b in bots1]))
 
-# ===== 清场 =====
+# robots 分布
+r = http_get("/api/admin/robots", tok)
+check("robots 分布", r.get("rooms", {}).get(str(roomId)) == 2, json.dumps(r))
+
+# ===== 撤回(账号留池) =====
 r = http("/api/admin/robots/clear", {"roomId": roomId}, tok)
-check("clear 接口", r.get("code") == 0 and r.get("cleared") == 2, json.dumps(r))
+check("撤回接口", r.get("code") == 0 and r.get("cleared") == 2, json.dumps(r))
+time.sleep(2)
+r = http_get(f"/api/admin/clubs/{clubId}/robots", tok)
+check("撤回后账号仍在池中", len(r.get("robots", [])) == 2)
 
 # 清桌收尾:解散房间(测试残留不留在生产)
 http(f"/api/admin/rooms/{roomId}/dismiss", {}, tok)

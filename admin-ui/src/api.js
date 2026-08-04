@@ -47,6 +47,9 @@ export const api = {
   adjustDiamond: (userId, amount, remark) => req('POST', '/users/diamond', { userId, amount, remark }),
   clubs: () => req('GET', '/clubs'),
   robots: () => req('GET', '/robots'),
+  clubRobots: (clubId) => req('GET', `/clubs/${clubId}/robots`),
+  generateRobots: (clubId, count, initScore) => req('POST', `/clubs/${clubId}/robots/generate`, { count, initScore }),
+  topUpRobots: (clubId, amount) => req('POST', `/clubs/${clubId}/robots/topup`, { amount }),
   spawnRobots: (roomId, count) => req('POST', '/robots/spawn', { roomId, count }),
   clearRobots: (roomId) => req('POST', '/robots/clear', { roomId }),
 }

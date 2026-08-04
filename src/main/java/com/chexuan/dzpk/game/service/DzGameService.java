@@ -60,6 +60,10 @@ public class DzGameService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private GpsService gpsService;
 
+    /** 机器人账号注册表(账号机器人 GPS 豁免用);单测为 null */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private com.chexuan.dzpk.robot.RobotRegistry robotRegistry;
+
     @Value("${dzpk.action-timeout-secs:15}")
     private int actionTimeoutSecs;
 
@@ -288,9 +292,10 @@ public class DzGameService {
                 return;
             }
             // 俱乐部房:仅成员可坐;群主/管理员不能玩(对齐扯旋 2026-07-25);群主钻石不足拒坐
-            // 机器人豁免(管理台一键生成陪打,不占俱乐部成员/积分体系)
-            boolean robotSit = com.chexuan.dzpk.robot.RobotService.isRobotId(userId);
-            if (room.getClubId() > 0 && clubService != null && !robotSit) {
+            // 大厅临时机器人(ID段)豁免;俱乐部账号机器人是真实成员,正常走校验
+            boolean tempRobot = com.chexuan.dzpk.robot.RobotService.isRobotId(userId);
+            boolean anyRobot = tempRobot || (robotRegistry != null && robotRegistry.isRobot(userId));
+            if (room.getClubId() > 0 && clubService != null && !tempRobot) {
                 if (!clubService.isMember(room.getClubId(), userId)) {
                     sendError(userId, roomId, "你不是该俱乐部成员,无法坐下");
                     return;
@@ -316,12 +321,13 @@ public class DzGameService {
                 return;
             }
             // GPS 防火牌(对齐扯旋):开了 gpsLimitOn 的桌,与桌上每人距离须达标(机器人无 GPS,豁免)
-            if (!robotSit && room.getRules() != null && room.getRules().isGpsLimitOn() && gpsService != null) {
+            if (!anyRobot && room.getRules() != null && room.getRules().isGpsLimitOn() && gpsService != null) {
                 double minM = cfgLong("gps_min_distance_m", 100);
                 long maxAgeMs = cfgLong("gps_max_age_secs", 90) * 1000L;
                 for (DzPlayer sp : room.getSeats()) {
                     if (sp == null || sp.getUserId() == userId) continue;
-                    if (com.chexuan.dzpk.robot.RobotService.isRobotId(sp.getUserId())) continue;
+                    if (com.chexuan.dzpk.robot.RobotService.isRobotId(sp.getUserId())
+                            || (robotRegistry != null && robotRegistry.isRobot(sp.getUserId()))) continue;
                     String gpsDeny = gpsService.checkPair(userId, sp.getUserId(), minM, maxAgeMs);
                     if (gpsDeny != null) {
                         sendError(userId, roomId, gpsDeny);

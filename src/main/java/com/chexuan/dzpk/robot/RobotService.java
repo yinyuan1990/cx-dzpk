@@ -80,6 +80,10 @@ public class RobotService {
     /** 系统参数中心(可为 null,退回 @Value 默认) */
     private final com.chexuan.dzpk.config.DzConfigService cfg;
 
+    /** 机器人账号注册表(dz_user.is_robot=1 真实账号池;单测可为 null) */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private RobotRegistry registry;
+
     @org.springframework.beans.factory.annotation.Autowired
     public RobotService(DzRoomManager roomManager, @Lazy DzGameService gameService,
                         com.chexuan.dzpk.config.DzConfigService cfg) {
@@ -114,13 +118,19 @@ public class RobotService {
         return cfg != null ? cfg.getLong("robot_max_delay_ms", maxDelayMs) : maxDelayMs;
     }
 
+    /** 是否机器人:大厅临时机器人(ID段) 或 俱乐部机器人账号(dz_user.is_robot=1) */
     public boolean isRobot(long userId) {
-        return isRobotId(userId);
+        return isRobotId(userId) || (registry != null && registry.isRobot(userId));
     }
 
-    /** 静态判断(引擎豁免机器人经济/俱乐部限制用,避免 bean 循环依赖) */
+    /** 静态判断【大厅临时机器人】(ID 段;引擎豁免其经济/俱乐部限制用,避免 bean 循环依赖) */
     public static boolean isRobotId(long userId) {
         return userId >= ROBOT_ID_BASE && userId < ROBOT_ID_BASE + 1_000_000L;
+    }
+
+    /** 把机器人挂到房间驱动表(收到 TURN 才会行动);俱乐部账号机器人上桌前由 DzRobotAdminService 调 */
+    public void registerRobot(long roomId, long userId) {
+        roomRobots.computeIfAbsent(roomId, k -> ConcurrentHashMap.newKeySet()).add(userId);
     }
 
     // ================================================================
@@ -168,39 +178,8 @@ public class RobotService {
     }
 
     // ================================================================
-    // 管理台一键生成(俱乐部房测试用,不受自动补位 fill-count/大厅限制)
+    // 管理台操作(俱乐部账号机器人的上桌由 DzRobotAdminService.deploy 走真人流程)
     // ================================================================
-
-    /** 向指定房间(含俱乐部房)生成 count 个机器人:随机昵称+头像,坐空位并带入,进牌局自动打 */
-    public synchronized Map<String, Object> spawnRobots(long roomId, int count) {
-        DzRoom room = roomManager.get(roomId);
-        if (room == null) return Map.of("code", 1, "msg", "房间不存在");
-        Set<Long> robots = roomRobots.computeIfAbsent(roomId, k -> ConcurrentHashMap.newKeySet());
-        Set<Integer> reserved = reservedSeats.computeIfAbsent(roomId, k -> ConcurrentHashMap.newKeySet());
-        // 清理已落座的预留(俱乐部房不走 fillCheck,预留标记在这里回收)
-        reserved.removeIf(i -> i < room.getMaxPlayers() && room.getSeats()[i] != null);
-        int spawned = 0;
-        for (int n = 0; n < Math.max(1, count); n++) {
-            int freeSeat = -1;
-            for (int i = 0; i < room.getMaxPlayers(); i++) {
-                if (room.getSeats()[i] == null && !reserved.contains(i)) { freeSeat = i; break; }
-            }
-            if (freeSeat == -1) break; // 没空位了
-            reserved.add(freeSeat);
-            long robotId = idGen.getAndIncrement();
-            String nick = NICKNAMES[ThreadLocalRandom.current().nextInt(NICKNAMES.length)]
-                    + (100 + ThreadLocalRandom.current().nextInt(900));
-            robots.add(robotId);
-            long buyin = randomBuyin(room);
-            log.info("管理台生成机器人: roomId={}, robotId={}, nick={}, seat={}, buyin={}",
-                    roomId, robotId, nick, freeSeat, buyin);
-            gameService.enterRoom(roomId, robotId, nick);
-            gameService.sitDown(roomId, robotId, freeSeat, null, randomRobotAvatar());
-            gameService.buyIn(roomId, robotId, buyin);
-            spawned++;
-        }
-        return Map.of("code", 0, "spawned", spawned, "total", robots.size());
-    }
 
     /** 清掉指定房间的全部机器人(牌局中的先标记站起,局末落地) */
     public synchronized Map<String, Object> clearRobots(long roomId) {
@@ -261,7 +240,7 @@ public class RobotService {
         long buyin = randomBuyin(room);
         log.info("机器人进场: roomId={}, robotId={}, nick={}, seat={}, buyin={}", roomId, robotId, nick, freeSeat, buyin);
         gameService.enterRoom(roomId, robotId, nick);
-        gameService.sitDown(roomId, robotId, freeSeat);
+        gameService.sitDown(roomId, robotId, freeSeat, null, randomRobotAvatar());
         gameService.buyIn(roomId, robotId, buyin);
 
         // 还没补够 → 下一轮继续(错峰进场更拟真)

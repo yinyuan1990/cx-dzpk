@@ -2,8 +2,9 @@
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { api } from '../api'
 
-// 俱乐部管理:列表 → 点进俱乐部 → 该俱乐部的活跃房间,对房间生成/清场机器人、强制解散。
-//   机器人随机昵称+头像,自动坐空位、带入、按牌力打;豁免俱乐部成员/积分限制,筹码不入账。
+// 俱乐部管理(对齐扯旋):列表 → 点进俱乐部 →
+//   ① 机器人池:一键生成真实机器人账号(随机昵称/头像,入会+上积分,与牌局无关)、一键补分;
+//   ② 活跃牌局:从池子派机器人上桌 / 撤回 / 强制解散。带入扣机器人自己的俱乐部积分,全程真人流程。
 const clubs = ref([])
 const rooms = ref([])          // overview 全部活跃房间
 const robotByRoom = ref({})
@@ -11,6 +12,12 @@ const current = ref(null)      // 当前点开的俱乐部
 const msg = ref('')
 const busy = ref(false)
 let timer
+
+// 机器人池(当前俱乐部)
+const pool = ref([])
+const genCount = ref(4)
+const genScore = ref(1000000)  // 初始积分(分):默认 1 万元
+const topupAmount = ref(1000000)
 
 function toast(t) {
   msg.value = t
@@ -22,6 +29,44 @@ async function load() {
   if (cl.code === 0) clubs.value = cl.clubs || []
   if (ov.code === 0) rooms.value = ov.rooms || []
   if (rb.code === 0) robotByRoom.value = rb.rooms || {}
+  if (current.value) loadPool()
+}
+
+async function loadPool() {
+  const res = await api.clubRobots(current.value.clubId)
+  if (res.code === 0) pool.value = res.robots || []
+}
+
+async function openClub(c) {
+  current.value = c
+  pool.value = []
+  await loadPool()
+}
+
+async function generate() {
+  if (busy.value) return
+  busy.value = true
+  try {
+    const res = await api.generateRobots(current.value.clubId, Number(genCount.value) || 1, Number(genScore.value) || 0)
+    if (res.code === 0) toast(`已生成 ${res.created} 个机器人(已入会并上分)`)
+    else toast(res.msg || '生成失败')
+    await loadPool()
+  } finally {
+    busy.value = false
+  }
+}
+
+async function topUp() {
+  if (busy.value) return
+  busy.value = true
+  try {
+    const res = await api.topUpRobots(current.value.clubId, Number(topupAmount.value) || 0)
+    if (res.code === 0) toast(`已给 ${res.affected} 个机器人各补 ${res.amount} 积分`)
+    else toast(res.msg || '补分失败')
+    await loadPool()
+  } finally {
+    busy.value = false
+  }
 }
 
 // 每个俱乐部的活跃房间数
@@ -46,8 +91,8 @@ async function spawn(roomId, count) {
   busy.value = true
   try {
     const res = await api.spawnRobots(Number(roomId), Number(count) || 1)
-    if (res.code === 0) toast(`已生成 ${res.spawned} 个机器人(房间 ${roomId} 共 ${res.total} 个)`)
-    else toast(res.msg || '生成失败')
+    if (res.code === 0) toast(`已派 ${res.deployed} 个机器人上桌(池内还剩 ${res.poolIdle} 个空闲)`)
+    else toast(res.msg || '派桌失败')
     setTimeout(load, 800)
   } finally {
     busy.value = false
@@ -59,8 +104,8 @@ async function clearBots(roomId) {
   busy.value = true
   try {
     const res = await api.clearRobots(Number(roomId))
-    if (res.code === 0) toast(`已清掉 ${res.cleared} 个机器人(牌局中的局末落地)`)
-    else toast(res.msg || '清场失败')
+    if (res.code === 0) toast(`已撤回 ${res.cleared} 个机器人(牌局中的局末落地,账号留在池子)`)
+    else toast(res.msg || '撤回失败')
     setTimeout(load, 800)
   } finally {
     busy.value = false
@@ -92,9 +137,9 @@ onUnmounted(() => clearInterval(timer))
 
     <!-- 俱乐部列表 -->
     <template v-if="!current">
-      <p class="hint">点击俱乐部查看它的牌局,对牌局生成机器人陪打(测试房间参数用)。</p>
+      <p class="hint">点击俱乐部:先一键生成机器人(真实账号,入会+上积分,与牌局无关),再对牌局派机器人上桌。</p>
       <p v-if="!clubs.length" class="empty">还没有俱乐部</p>
-      <div v-for="c in clubs" :key="c.clubId" class="club" @click="current = c">
+      <div v-for="c in clubs" :key="c.clubId" class="club" @click="openClub(c)">
         <div class="c-main">
           <b>{{ c.name }}</b>
           <span class="tag">编号 {{ c.clubNo }}</span>
@@ -118,11 +163,34 @@ onUnmounted(() => clearInterval(timer))
         <span class="tag">群主 {{ current.ownerNick || current.ownerId }}</span>
         <span class="tag">成员 {{ current.memberCount }}</span>
       </div>
-      <p class="hint">
-        机器人随机昵称/头像,自动坐空位、带入、按牌力打;豁免成员/积分限制,筹码不入账,不污染俱乐部账目。真人全部离开后自动撤场。
-      </p>
+      <!-- 机器人池(与牌局无关,对齐扯旋:真实账号+真实成员+真实积分) -->
+      <div class="pool">
+        <div class="pool-head">
+          <b>机器人池</b>
+          <span class="tag">{{ pool.length }} 个</span>
+          <span class="tag">空闲 {{ pool.filter((p) => !p.inRoom).length }}</span>
+        </div>
+        <div class="pool-ops">
+          <select v-model.number="genCount">
+            <option v-for="n in 10" :key="n" :value="n">{{ n }} 个</option>
+          </select>
+          <input v-model.number="genScore" type="number" min="0" title="初始积分(分)" />
+          <button class="btn primary" :disabled="busy" @click="generate">一键生成机器人</button>
+          <span class="gap"></span>
+          <input v-model.number="topupAmount" type="number" min="1" title="补分金额(分)" />
+          <button class="btn" :disabled="busy || !pool.length" @click="topUp">一键补分</button>
+        </div>
+        <div v-if="pool.length" class="pool-list">
+          <span v-for="p in pool" :key="p.userId" class="bot" :class="{ playing: p.inRoom }"
+            :title="'ID:' + p.userId + ' 积分:' + p.score">
+            <img v-if="p.avatar" :src="p.avatar" />
+            {{ p.nickname }}<i>{{ p.inRoom ? '在桌' : p.score }}</i>
+          </span>
+        </div>
+        <p v-else class="empty small">还没有机器人,点上方「一键生成」。生成的是真实账号(随机昵称/头像),已入会并上积分,打牌走真人流程、带入扣自己积分。</p>
+      </div>
 
-      <p v-if="!clubRooms.length" class="empty">该俱乐部当前没有活跃牌局。先在游戏里开一桌,这里刷新后就能加机器人。</p>
+      <p v-if="!clubRooms.length" class="empty">该俱乐部当前没有活跃牌局。先在游戏里开一桌,刷新后就能派机器人上桌。</p>
       <div v-for="r in clubRooms" :key="r.roomId" class="room">
         <div class="head">
           <b>{{ r.name || '房间' + r.roomId }}</b>
@@ -151,9 +219,9 @@ onUnmounted(() => clearInterval(timer))
           <select v-model.number="countOf[r.roomId]">
             <option v-for="n in 8" :key="n" :value="n">{{ n }} 个</option>
           </select>
-          <button class="btn primary" :disabled="busy" @click="spawn(r.roomId, cntFor(r.roomId))">生成机器人</button>
+          <button class="btn primary" :disabled="busy" @click="spawn(r.roomId, cntFor(r.roomId))">派机器人上桌</button>
           <button class="btn danger" :disabled="busy || !robotByRoom[String(r.roomId)]"
-            @click="clearBots(r.roomId)">清掉机器人</button>
+            @click="clearBots(r.roomId)">撤回机器人</button>
           <button class="btn dark" @click="dismiss(r)">强制解散</button>
         </div>
       </div>
@@ -208,4 +276,27 @@ td { padding: 4px 8px; border-top: 1px solid #1c2833; }
 .btn.dark { background: #2d3a48; color: #cbd6e0; margin-left: auto; }
 .btn:disabled { opacity: 0.45; }
 .empty { color: #7d8fa0; font-size: 14px; }
+.empty.small { font-size: 12px; margin: 8px 0 0; }
+.pool {
+  background: #16202b; border: 1px solid #2a3947; border-radius: 10px;
+  padding: 12px 14px; margin-bottom: 14px;
+}
+.pool-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.pool-ops { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.pool-ops select, .pool-ops input {
+  background: #0f1821; border: 1px solid #2a3947; color: #dbe5ee;
+  border-radius: 6px; padding: 6px 8px; font-size: 13px;
+}
+.pool-ops input { width: 110px; }
+.gap { width: 14px; }
+.pool-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.bot {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: #1c2833; border-radius: 14px; padding: 4px 10px 4px 4px;
+  font-size: 12px; color: #cbd6e0;
+}
+.bot img { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; }
+.bot i { font-style: normal; color: #7d8fa0; font-size: 11px; }
+.bot.playing { border: 1px solid #2c5238; }
+.bot.playing i { color: #6cc06c; }
 </style>

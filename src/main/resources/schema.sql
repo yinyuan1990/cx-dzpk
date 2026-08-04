@@ -252,8 +252,12 @@ CREATE TABLE IF NOT EXISTS dz_user (
     register_device TINYINT      NOT NULL DEFAULT 1,
     diamond         BIGINT       NOT NULL DEFAULT 0,
     state           TINYINT      NOT NULL DEFAULT 1,
+    -- 机器人标记(对齐扯旋 user.is_robot):0=真人 1=打牌机器人。机器人是真实账号+真实俱乐部成员
+    is_robot        TINYINT      NOT NULL DEFAULT 0,
     created_at      DATETIME     NOT NULL,
     last_login_at   DATETIME     NULL
 );
 CREATE UNIQUE INDEX idx_dz_user_phone ON dz_user (phone);
 CREATE INDEX idx_dz_user_number ON dz_user (number_id);
+-- 机器人标记(旧库补列)
+ALTER TABLE dz_user ADD COLUMN is_robot TINYINT NOT NULL DEFAULT 0;
