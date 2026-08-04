@@ -7,7 +7,7 @@ import RoomsView from './views/RoomsView.vue'
 import GiftsView from './views/GiftsView.vue'
 import RoomParamsView from './views/RoomParamsView.vue'
 import UsersView from './views/UsersView.vue'
-import RobotsView from './views/RobotsView.vue'
+import ClubsView from './views/ClubsView.vue'
 
 // 布局对齐扯旋管理后台:左侧深色竖排菜单栏,右侧内容区。
 const logged = ref(false)
@@ -18,8 +18,8 @@ const MENUS = [
   { key: 'roomParams', label: '牌局参数', icon: '▦' },
   { key: 'gifts', label: '礼物配置', icon: '🎁' },
   { key: 'users', label: '用户管理', icon: '👤' },
+  { key: 'clubs', label: '俱乐部管理', icon: '♣' },
   { key: 'rooms', label: '房间监控', icon: '👁' },
-  { key: 'robots', label: '机器人', icon: '🤖' },
 ]
 
 onMounted(() => { logged.value = hasToken() })
@@ -52,7 +52,7 @@ function logout() {
       <RoomParamsView v-else-if="tab === 'roomParams'" />
       <GiftsView v-else-if="tab === 'gifts'" />
       <UsersView v-else-if="tab === 'users'" />
-      <RobotsView v-else-if="tab === 'robots'" />
+      <ClubsView v-else-if="tab === 'clubs'" />
       <RoomsView v-else />
     </main>
   </div>

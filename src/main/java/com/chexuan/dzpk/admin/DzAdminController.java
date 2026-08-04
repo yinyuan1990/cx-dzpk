@@ -223,6 +223,21 @@ public class DzAdminController {
                 "rooms", rooms);
     }
 
+    // ==================== 俱乐部管理 ====================
+
+    /** 俱乐部列表(正常状态):群主昵称、成员数,配合 overview 的房间 clubId 组装俱乐部详情 */
+    @GetMapping("/clubs")
+    public Map<String, Object> clubs(@RequestHeader(value = "X-Admin-Token", required = false) String token) {
+        if (!authed(token)) return deny();
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT c.id AS clubId, c.club_no AS clubNo, c.name, c.remark, c.creator_user_id AS ownerId, " +
+                        "u.nickname AS ownerNick, c.created_at AS createdAt, " +
+                        "(SELECT COUNT(*) FROM dz_club_member m WHERE m.club_id = c.id AND m.status = 1) AS memberCount " +
+                        "FROM dz_club c LEFT JOIN dz_user u ON u.id = c.creator_user_id " +
+                        "WHERE c.state = 1 ORDER BY c.id DESC LIMIT 200");
+        return Map.of("code", 0, "clubs", rows);
+    }
+
     // ==================== 机器人(一键生成,俱乐部房测试用) ====================
 
     /** 各房间机器人分布 */

@@ -45,6 +45,7 @@ export const api = {
   deleteGift: (id) => req('DELETE', `/gifts/${id}`),
   users: (q) => req('GET', '/users' + (q ? `?q=${encodeURIComponent(q)}` : '')),
   adjustDiamond: (userId, amount, remark) => req('POST', '/users/diamond', { userId, amount, remark }),
+  clubs: () => req('GET', '/clubs'),
   robots: () => req('GET', '/robots'),
   spawnRobots: (roomId, count) => req('POST', '/robots/spawn', { roomId, count }),
   clearRobots: (roomId) => req('POST', '/robots/clear', { roomId }),
