@@ -144,7 +144,7 @@ public class DzRecordStore {
             return jdbc.query("SELECT room_id, room_name, club_id, period_seq, bring_in, final_stack, profit, rake, " +
                             "refund, hand_count, win_count, lose_count, played_secs, reason, created_at " +
                             "FROM dz_settle_record WHERE user_id = ?" + clubCond +
-                            " ORDER BY id DESC LIMIT " + Math.min(limit, 100),
+                            " ORDER BY id DESC LIMIT " + Math.min(Math.max(limit, 1), 500),
                     (rs, i) -> {
                         Map<String, Object> m = new LinkedHashMap<>();
                         m.put("roomId", rs.getLong("room_id"));

@@ -427,7 +427,7 @@ public class DzClubService {
         }
         return jdbc.query("SELECT type, amount, before_score, after_score, other_user_id, remark, created_at " +
                         "FROM dz_score_log WHERE club_id = ? AND user_id = ? ORDER BY id DESC LIMIT " +
-                        Math.min(Math.max(limit, 1), 100),
+                        Math.min(Math.max(limit, 1), 500),
                 (rs, i) -> {
                     Map<String, Object> m = new LinkedHashMap<>();
                     int type = rs.getInt("type");
