@@ -65,6 +65,64 @@ public class DzAuthController {
         }
     }
 
+    /**
+     * 修改资料(昵称/头像) — 需 token(Authorization: Bearer xxx 或 body.token)。
+     * {username, avatar} → 返回最新 {userId,numberId,nickname,avatar,diamond}
+     */
+    @PostMapping("/update-profile")
+    public Map<String, Object> updateProfile(
+            @org.springframework.web.bind.annotation.RequestHeader(value = "Authorization", required = false) String auth,
+            @RequestBody Map<String, Object> body) {
+        Long userId = authedUserId(auth, body);
+        if (userId == null) return fail("登录已过期,请重新登录");
+        try {
+            String username = str(body, "username");
+            if (username == null || username.isBlank()) username = str(body, "nickname");
+            Map<String, Object> profile = userService.updateProfile(userId, username, str(body, "avatar"));
+            Map<String, Object> out = new LinkedHashMap<>();
+            out.put("code", 0);
+            out.put("userId", profile.get("userId"));
+            out.put("numberId", profile.get("numberId"));
+            out.put("nickname", profile.get("nickname"));
+            out.put("avatar", profile.get("avatar"));
+            out.put("diamond", profile.get("diamond"));
+            return out;
+        } catch (DzUserService.AuthException e) {
+            return fail(e.getMessage());
+        } catch (Exception e) {
+            log.error("修改资料异常: userId={}", userId, e);
+            return fail("修改失败,请稍后再试");
+        }
+    }
+
+    /** 修改登录密码 — 需 token。{oldPassword, newPassword, confirmPassword} */
+    @PostMapping("/change-password")
+    public Map<String, Object> changePassword(
+            @org.springframework.web.bind.annotation.RequestHeader(value = "Authorization", required = false) String auth,
+            @RequestBody Map<String, Object> body) {
+        Long userId = authedUserId(auth, body);
+        if (userId == null) return fail("登录已过期,请重新登录");
+        try {
+            userService.changePassword(userId, str(body, "oldPassword"),
+                    str(body, "newPassword"), str(body, "confirmPassword"));
+            return Map.of("code", 0);
+        } catch (DzUserService.AuthException e) {
+            return fail(e.getMessage());
+        } catch (Exception e) {
+            log.error("修改密码异常: userId={}", userId, e);
+            return fail("修改失败,请稍后再试");
+        }
+    }
+
+    /** 从 Authorization: Bearer xxx(或 body.token 兜底)验签取 userId */
+    private Long authedUserId(String auth, Map<String, Object> body) {
+        String token = null;
+        if (auth != null && auth.startsWith("Bearer ")) token = auth.substring(7).trim();
+        if ((token == null || token.isBlank()) && body != null) token = str(body, "token");
+        if (token == null || token.isBlank()) return null;
+        return jwt.verify(token);
+    }
+
     private Map<String, Object> ok(Map<String, Object> profile) {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("code", 0);

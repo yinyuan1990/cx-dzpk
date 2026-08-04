@@ -121,6 +121,39 @@ public class DzUserService {
         return toProfile(row);
     }
 
+    /** 修改资料(昵称/头像;校验口径与注册一致)。返回最新 profile */
+    public Map<String, Object> updateProfile(long userId, String username, String avatar) {
+        String nickname = validNickname(username);
+        if (avatar == null || avatar.isBlank()) throw new AuthException("头像不能为空");
+        if (avatar.length() > 255) throw new AuthException("头像地址过长");
+        int n = jdbc.update("UPDATE dz_user SET nickname = ?, avatar = ? WHERE id = ? AND state = 1",
+                nickname, avatar.trim(), userId);
+        if (n == 0) throw new AuthException("账号不存在或已被封禁");
+        log.info("修改资料: userId={}, nickname={}", userId, nickname);
+        return profile(userId);
+    }
+
+    /** 修改登录密码:校验旧密码 + 新密码规则(与注册一致),换新 salt 存储 */
+    public void changePassword(long userId, String oldPassword, String newPassword, String confirmPassword) {
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT * FROM dz_user WHERE id = ? AND state = 1", userId);
+        if (rows.isEmpty()) throw new AuthException("账号不存在或已被封禁");
+        Map<String, Object> row = rows.get(0);
+        if (!hash((String) col(row, "salt"), oldPassword == null ? "" : oldPassword)
+                .equals(col(row, "password_hash"))) {
+            throw new AuthException("原密码错误");
+        }
+        if (newPassword == null || !newPassword.matches("^(?=.*[a-zA-Z])(?=.*\\d)[a-zA-Z\\d]{6,20}$")) {
+            throw new AuthException("新密码必须包含字母和数字,长度6-20位");
+        }
+        if (!newPassword.equals(confirmPassword)) throw new AuthException("两次新密码输入不一致");
+        if (newPassword.equals(oldPassword)) throw new AuthException("新密码不能与原密码相同");
+        String salt = HexFormat.of().formatHex(randomBytes(8));
+        jdbc.update("UPDATE dz_user SET salt = ?, password_hash = ? WHERE id = ?",
+                salt, hash(salt, newPassword), userId);
+        log.info("修改密码: userId={}", userId);
+    }
+
     /** userId → profile;不存在/封禁返回 null(WS 登录用真实库昵称/头像) */
     public Map<String, Object> profile(long userId) {
         List<Map<String, Object>> rows = jdbc.queryForList(
