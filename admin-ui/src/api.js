@@ -48,8 +48,11 @@ export const api = {
   clubs: () => req('GET', '/clubs'),
   robots: () => req('GET', '/robots'),
   clubRobots: (clubId) => req('GET', `/clubs/${clubId}/robots`),
+  clubMembers: (clubId, type) => req('GET', `/clubs/${clubId}/members?type=${type || 'all'}`),
   generateRobots: (clubId, count, initScore) => req('POST', `/clubs/${clubId}/robots/generate`, { count, initScore }),
   topUpRobots: (clubId, amount) => req('POST', `/clubs/${clubId}/robots/topup`, { amount }),
+  renameRobots: (clubId) => req('POST', `/clubs/${clubId}/robots/rename`, {}),
+  assignRobotAvatars: (clubId, urls) => req('POST', `/clubs/${clubId}/robots/avatars`, { urls }),
   spawnRobots: (roomId, count) => req('POST', '/robots/spawn', { roomId, count }),
   clearRobots: (roomId) => req('POST', '/robots/clear', { roomId }),
 }

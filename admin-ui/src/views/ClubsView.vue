@@ -13,11 +13,15 @@ const msg = ref('')
 const busy = ref(false)
 let timer
 
-// 机器人池(当前俱乐部)
-const pool = ref([])
+// 成员列表(当前俱乐部,分类:all/human/robot)
+const members = ref([])
+const memberType = ref('all')
+const memberStats = ref({ total: 0, robotCount: 0 })
 const genCount = ref(4)
 const genScore = ref(1000000)  // 初始积分(分):默认 1 万元
 const topupAmount = ref(1000000)
+const avatarInput = ref(null)
+const ROLE_TXT = { 1: '成员', 2: '管理员', 3: '群主', 4: '合伙人' }
 
 function toast(t) {
   msg.value = t
@@ -29,18 +33,27 @@ async function load() {
   if (cl.code === 0) clubs.value = cl.clubs || []
   if (ov.code === 0) rooms.value = ov.rooms || []
   if (rb.code === 0) robotByRoom.value = rb.rooms || {}
-  if (current.value) loadPool()
+  if (current.value) loadMembers()
 }
 
-async function loadPool() {
-  const res = await api.clubRobots(current.value.clubId)
-  if (res.code === 0) pool.value = res.robots || []
+async function loadMembers() {
+  const res = await api.clubMembers(current.value.clubId, memberType.value)
+  if (res.code === 0) {
+    members.value = res.members || []
+    memberStats.value = { total: res.total || 0, robotCount: res.robotCount || 0 }
+  }
+}
+
+function switchType(t) {
+  memberType.value = t
+  loadMembers()
 }
 
 async function openClub(c) {
   current.value = c
-  pool.value = []
-  await loadPool()
+  members.value = []
+  memberType.value = 'all'
+  await loadMembers()
 }
 
 async function generate() {
@@ -50,7 +63,7 @@ async function generate() {
     const res = await api.generateRobots(current.value.clubId, Number(genCount.value) || 1, Number(genScore.value) || 0)
     if (res.code === 0) toast(`已生成 ${res.created} 个机器人(已入会并上分)`)
     else toast(res.msg || '生成失败')
-    await loadPool()
+    await loadMembers()
   } finally {
     busy.value = false
   }
@@ -63,7 +76,80 @@ async function topUp() {
     const res = await api.topUpRobots(current.value.clubId, Number(topupAmount.value) || 0)
     if (res.code === 0) toast(`已给 ${res.affected} 个机器人各补 ${res.amount} 积分`)
     else toast(res.msg || '补分失败')
-    await loadPool()
+    await loadMembers()
+  } finally {
+    busy.value = false
+  }
+}
+
+async function renameAll() {
+  if (busy.value) return
+  if (!confirm('把该俱乐部全部机器人昵称随机换成德州风格?')) return
+  busy.value = true
+  try {
+    const res = await api.renameRobots(current.value.clubId)
+    if (res.code === 0) toast(`已随机改名 ${res.changed} 个机器人`)
+    else toast(res.msg || '改名失败')
+    await loadMembers()
+  } finally {
+    busy.value = false
+  }
+}
+
+// ===== 批量换头像:本地多选图 → 压缩 → MinIO 直传 → 一人一图分配 =====
+function compressImage(file, maxSize = 256) {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => {
+      const scale = Math.min(1, maxSize / Math.max(img.width, img.height))
+      const canvas = document.createElement('canvas')
+      canvas.width = Math.round(img.width * scale)
+      canvas.height = Math.round(img.height * scale)
+      canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height)
+      canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('压缩失败'))), 'image/jpeg', 0.85)
+      URL.revokeObjectURL(img.src)
+    }
+    img.onerror = () => reject(new Error('图片读取失败'))
+    img.src = URL.createObjectURL(file)
+  })
+}
+
+async function uploadOne(blob) {
+  const prep = await fetch('/api/upload/prepare', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ type: 'avatar', fileName: 'robot.jpg', fileSize: blob.size }),
+  }).then((r) => r.json())
+  if (prep.code !== 0) throw new Error(prep.msg || '预签名失败')
+  const put = await fetch(prep.presignedUrl, { method: 'PUT', body: blob })
+  if (!put.ok) throw new Error('上传失败 ' + put.status)
+  return prep.accessUrl
+}
+
+async function onPickAvatars(e) {
+  const files = Array.from(e.target.files || [])
+  e.target.value = ''
+  if (!files.length || busy.value) return
+  const robotCount = memberStats.value.robotCount
+  if (files.length < robotCount) {
+    toast(`一人一图:机器人 ${robotCount} 个,需选 ≥ ${robotCount} 张图(当前 ${files.length} 张)`)
+    return
+  }
+  busy.value = true
+  try {
+    toast(`上传中 0/${files.length}…`)
+    const urls = []
+    for (let i = 0; i < files.length; i++) {
+      const blob = await compressImage(files[i])
+      urls.push(await uploadOne(blob))
+      msg.value = `上传中 ${i + 1}/${files.length}…`
+    }
+    const res = await api.assignRobotAvatars(current.value.clubId, urls)
+    if (res.code === 0) toast(`已给 ${res.changed} 个机器人分配头像(一人一图)`)
+    else toast(res.msg || '分配失败')
+    await loadMembers()
+  } catch (err) {
+    toast(err.message || '批量换头像失败')
   } finally {
     busy.value = false
   }
@@ -163,13 +249,19 @@ onUnmounted(() => clearInterval(timer))
         <span class="tag">群主 {{ current.ownerNick || current.ownerId }}</span>
         <span class="tag">成员 {{ current.memberCount }}</span>
       </div>
-      <!-- 机器人池(与牌局无关,对齐扯旋:真实账号+真实成员+真实积分) -->
+      <!-- 俱乐部成员(全部/真人/机器人分类;机器人=真实账号,生成与牌局无关) -->
       <div class="pool">
         <div class="pool-head">
-          <b>机器人池</b>
-          <span class="tag">{{ pool.length }} 个</span>
-          <span class="tag">空闲 {{ pool.filter((p) => !p.inRoom).length }}</span>
+          <b>俱乐部成员</b>
+          <span class="tag">共 {{ memberStats.total }} 人</span>
+          <span class="tag bots">机器人 {{ memberStats.robotCount }}</span>
+          <span class="type-tabs">
+            <button v-for="t in [['all', '全部'], ['human', '真人'], ['robot', '机器人']]" :key="t[0]"
+              class="type-tab" :class="{ on: memberType === t[0] }" @click="switchType(t[0])">{{ t[1] }}</button>
+          </span>
         </div>
+
+        <!-- 机器人操作:生成 / 补分 / 改名 / 批量换头像 -->
         <div class="pool-ops">
           <select v-model.number="genCount">
             <option v-for="n in 10" :key="n" :value="n">{{ n }} 个</option>
@@ -178,16 +270,32 @@ onUnmounted(() => clearInterval(timer))
           <button class="btn primary" :disabled="busy" @click="generate">一键生成机器人</button>
           <span class="gap"></span>
           <input v-model.number="topupAmount" type="number" min="1" title="补分金额(分)" />
-          <button class="btn" :disabled="busy || !pool.length" @click="topUp">一键补分</button>
+          <button class="btn" :disabled="busy || !memberStats.robotCount" @click="topUp">一键补分</button>
+          <button class="btn" :disabled="busy || !memberStats.robotCount" @click="renameAll">一键改名</button>
+          <button class="btn" :disabled="busy || !memberStats.robotCount"
+            @click="avatarInput && avatarInput.click()">批量换头像</button>
+          <input ref="avatarInput" type="file" accept="image/*" multiple style="display: none" @change="onPickAvatars" />
         </div>
-        <div v-if="pool.length" class="pool-list">
-          <span v-for="p in pool" :key="p.userId" class="bot" :class="{ playing: p.inRoom }"
-            :title="'ID:' + p.userId + ' 积分:' + p.score">
-            <img v-if="p.avatar" :src="p.avatar" />
-            {{ p.nickname }}<i>{{ p.inRoom ? '在桌' : p.score }}</i>
-          </span>
-        </div>
-        <p v-else class="empty small">还没有机器人,点上方「一键生成」。生成的是真实账号(随机昵称/头像),已入会并上积分,打牌走真人流程、带入扣自己积分。</p>
+
+        <table v-if="members.length" class="mem-table">
+          <thead>
+            <tr><th>头像</th><th>昵称</th><th>ID</th><th>角色</th><th>积分</th><th>类型</th><th>状态</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="m in members" :key="m.userId">
+              <td><img v-if="m.avatar" :src="m.avatar" class="mav" /></td>
+              <td>{{ m.nickname }}</td>
+              <td>{{ m.numberId || m.userId }}</td>
+              <td>{{ ROLE_TXT[m.role] || m.role }}</td>
+              <td>{{ m.score }}</td>
+              <td><span :class="m.isRobot === 1 ? 'is-bot' : 'is-human'">{{ m.isRobot === 1 ? '机器人' : '真人' }}</span></td>
+              <td><span :class="m.inRoom ? 'ok' : 'idle'">{{ m.inRoom ? '在桌' : '空闲' }}</span></td>
+            </tr>
+          </tbody>
+        </table>
+        <p v-else class="empty small">
+          {{ memberType === 'robot' ? '还没有机器人,点上方「一键生成」。生成的是真实账号(德州风随机昵称/头像),已入会并上积分,打牌走真人流程、带入扣自己积分。' : '暂无成员' }}
+        </p>
       </div>
 
       <p v-if="!clubRooms.length" class="empty">该俱乐部当前没有活跃牌局。先在游戏里开一桌,刷新后就能派机器人上桌。</p>
@@ -289,14 +397,18 @@ td { padding: 4px 8px; border-top: 1px solid #1c2833; }
 }
 .pool-ops input { width: 110px; }
 .gap { width: 14px; }
-.pool-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-.bot {
-  display: inline-flex; align-items: center; gap: 6px;
-  background: #1c2833; border-radius: 14px; padding: 4px 10px 4px 4px;
-  font-size: 12px; color: #cbd6e0;
+.type-tabs { margin-left: auto; display: flex; gap: 4px; }
+.type-tab {
+  background: #0f1821; color: #7d8fa0; padding: 4px 12px;
+  font-size: 12px; border-radius: 12px;
 }
-.bot img { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; }
-.bot i { font-style: normal; color: #7d8fa0; font-size: 11px; }
-.bot.playing { border: 1px solid #2c5238; }
-.bot.playing i { color: #6cc06c; }
+.type-tab.on { background: #2c5238; color: #a8e8b8; }
+.mem-table { width: 100%; margin-top: 12px; border-collapse: collapse; font-size: 13px; }
+.mem-table th { text-align: left; color: #7d8fa0; font-weight: 400; padding: 4px 8px; }
+.mem-table td { padding: 4px 8px; border-top: 1px solid #1c2833; }
+.mav { width: 26px; height: 26px; border-radius: 50%; object-fit: cover; display: block; }
+.is-bot { color: #6cb8f0; }
+.is-human { color: #cbd6e0; }
+.ok { color: #6cc06c; }
+.idle { color: #7d8fa0; }
 </style>

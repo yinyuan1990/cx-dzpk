@@ -48,21 +48,44 @@ public class DzRobotAdminService {
         this.robotService = robotService;
     }
 
-    // ==================== 昵称词库(扯旋风格,简化版:组合空间约 3000 种) ====================
+    // ==================== 德州昵称词库(纯中文德州术语风,对齐扯旋"按语料分桶"思路) ====================
+    // 组合空间:完整词 78 + 前缀×动作 16×22=352 + 场景×称号 12×14=168 + 叠字小名 ~5000 → 同俱乐部不重名
 
+    /** 完整昵称:德州黑话/牌型/打法风 */
+    private static final String[] NICK_WHOLE = {
+            "河牌奇迹", "坚果在手", "翻前梭哈", "慢玩大师", "底池怪兽", "常胜鲨鱼", "跟注站",
+            "诈唬艺术家", "大盲守卫", "抢盲专家", "读牌大师", "数学玩家", "位置玩家", "紧凶打法",
+            "松到没边", "石头一块", "鱼塘塘主", "翻牌击中", "转牌反超", "河牌绝杀", "口袋对王",
+            "暗三条", "两头顺子", "卡顺听牌", "同花听牌", "葫芦满天", "四条带走", "天顺到手",
+            "隐形坚果", "干燥牌面", "湿润牌面", "薄价值下注", "超池全下", "极化范围", "平衡大师",
+            "剥削打法", "期望值信徒", "全下之王", "弃牌冠军", "过牌加注", "三条街价值", "免费看牌",
+            "买保险专业户", "从不买保险", "牌运正旺", "手气爆棚", "稳如老狗", "输完就走",
+            "赢了加鸡腿", "通宵战神", "牌桌常客", "从不虚张", "一手好牌", "锦鲤本人", "气运之子",
+            "倒霉蛋", "老江湖", "拼命三郎", "熬夜冠军", "常胜军", "钉子户", "守夜人", "老油条",
+            "冷面杀手", "面无表情", "墨镜大哥", "帽檐压低", "筹码城堡", "码农上桌", "深夜鲨鱼",
+            "凌晨三点半", "最后一个筹码", "翻倍或回家", "短码专家", "深码怪", "单挑王", "多人底池混子"
+    };
+
+    /** 前缀 × 动作(如"专逮全下""河牌就偷鸡") */
     private static final String[] NICK_PREFIX = {
-            "专逮", "就爱", "天天", "半夜", "从不", "最爱", "一直", "专门", "开局就", "上桌就",
-            "见牌就", "逢人就", "隔壁", "楼下", "巷子头", "三天两头", "一摸牌就", "老", "小", "阿"
+            "专逮", "就爱", "天天", "半夜", "从不", "最爱", "一直", "专门",
+            "开局就", "上桌就", "见牌就", "翻前", "翻牌圈", "转牌就", "河牌只", "醒来就"
     };
     private static final String[] NICK_CORE = {
-            "全下", "偷鸡", "诈唬", "跟注", "弃牌", "加注", "看牌", "梭哈", "翻牌", "河杀",
-            "顶对", "暗三", "两头顺", "同花", "口袋对", "慢打", "快攻", "守盲", "抢盲", "补牌"
+            "全下", "偷鸡", "诈唬", "跟注", "弃牌", "加注", "看牌", "梭哈", "慢玩", "快打",
+            "守盲", "抢盲", "补牌", "听花", "卡顺", "平跟", "过牌", "埋牌", "亮牌", "打光",
+            "追花", "偷底池"
     };
-    private static final String[] NICK_WHOLE = {
-            "牌运正旺", "手气爆棚", "稳如老狗", "输完就走", "赢了加鸡腿", "通宵战神", "牌桌常客",
-            "从不虚张", "一手好牌", "锦鲤本人", "气运之子", "倒霉蛋", "老江湖", "拼命三郎",
-            "熬夜冠军", "常胜军", "钉子户", "守夜人", "扛把子", "老油条"
+
+    /** 场景 × 称号(如"深夜牌神""鱼塘之王") */
+    private static final String[] NICK_PLACE = {
+            "深夜", "凌晨", "周末", "鱼塘", "牌桌", "河边", "转角", "长牌桌", "短牌桌", "线上", "地下室", "阳台"
     };
+    private static final String[] NICK_TITLE = {
+            "牌神", "鲨鱼", "之王", "职业哥", "老炮", "常客", "小鱼", "大神", "扛把子", "钉子户", "守卫", "猎人", "渔夫", "刺客"
+    };
+
+    /** 叠字小名(真人感稀释,组合空间最大) */
     private static final String NICK_DOUBLE_CHARS =
             "勇强娟花妹龙虎娃军林伟敏芳英霞燕梅兰菊蓉丽刚建波涛超磊静娜杰鹏飞洪贵富明亮华国平安康宁雪冬夏秋春月星云雨风山海";
 
@@ -80,8 +103,9 @@ public class DzRobotAdminService {
     private String pickNickname() {
         ThreadLocalRandom r = ThreadLocalRandom.current();
         int bucket = r.nextInt(100);
-        if (bucket < 30) return NICK_WHOLE[r.nextInt(NICK_WHOLE.length)];
-        if (bucket < 65) return NICK_PREFIX[r.nextInt(NICK_PREFIX.length)] + NICK_CORE[r.nextInt(NICK_CORE.length)];
+        if (bucket < 25) return NICK_WHOLE[r.nextInt(NICK_WHOLE.length)];
+        if (bucket < 50) return NICK_PREFIX[r.nextInt(NICK_PREFIX.length)] + NICK_CORE[r.nextInt(NICK_CORE.length)];
+        if (bucket < 65) return NICK_PLACE[r.nextInt(NICK_PLACE.length)] + NICK_TITLE[r.nextInt(NICK_TITLE.length)];
         // 叠字小名:勇勇 / 小霞 / 军哥
         char c = NICK_DOUBLE_CHARS.charAt(r.nextInt(NICK_DOUBLE_CHARS.length()));
         String[] pre = {"", "", "小", "老", "阿"};
@@ -91,7 +115,17 @@ public class DzRobotAdminService {
         return name.length() < 2 ? name + c : name;
     }
 
-    private static String randomAvatar() {
+    /** 本地头像池(16 个);生成时优先分配该俱乐部机器人还没用过的,用尽才随机(对齐扯旋一人一图思路) */
+    private String pickAvatar(long clubId) {
+        Set<String> usedAv = new HashSet<>(jdbc.queryForList(
+                "SELECT u.avatar FROM dz_user u JOIN dz_club_member m ON m.user_id = u.id " +
+                        "WHERE m.club_id = ? AND u.is_robot = 1", String.class, clubId));
+        List<String> free = new ArrayList<>();
+        for (int i = 1; i <= 16; i++) {
+            String av = "/assets/table/heads/head_" + i + ".png";
+            if (!usedAv.contains(av)) free.add(av);
+        }
+        if (!free.isEmpty()) return free.get(ThreadLocalRandom.current().nextInt(free.size()));
         return "/assets/table/heads/head_" + (1 + ThreadLocalRandom.current().nextInt(16)) + ".png";
     }
 
@@ -115,7 +149,7 @@ public class DzRobotAdminService {
         for (int i = 0; i < Math.max(1, Math.min(50, count)); i++) {
             try {
                 String nick = randomNickname(used);
-                long uid = insertRobotUser(nick, randomAvatar());
+                long uid = insertRobotUser(nick, pickAvatar(clubId));
                 joinClub(clubId, uid, nick);
                 if (initScore > 0) {
                     clubService.creditScoreForGame(clubId, uid, initScore, 14, "机器人初始上分");
@@ -179,7 +213,7 @@ public class DzRobotAdminService {
         return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(s.getBytes()));
     }
 
-    // ==================== 池子列表 / 一键补分 ====================
+    // ==================== 成员列表(分类) / 一键补分 / 批量头像 / 一键改名 ====================
 
     /** 俱乐部机器人池:昵称/头像/积分/是否在桌 */
     public Map<String, Object> list(long clubId) {
@@ -193,6 +227,78 @@ public class DzRobotAdminService {
             r.put("inRoom", seated.contains(uid));
         }
         return Map.of("code", 0, "robots", rows);
+    }
+
+    /**
+     * 俱乐部全部成员(分类:all=全部 / human=真人 / robot=机器人):
+     * 昵称/头像/角色/积分/机器人标记/是否在桌。
+     */
+    public Map<String, Object> members(long clubId, String type) {
+        String cond = "robot".equalsIgnoreCase(type) ? " AND u.is_robot = 1"
+                : "human".equalsIgnoreCase(type) ? " AND u.is_robot = 0" : "";
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT u.id AS userId, u.nickname, u.avatar, u.number_id AS numberId, u.is_robot AS isRobot, " +
+                        "m.role, m.score " +
+                        "FROM dz_user u JOIN dz_club_member m ON m.user_id = u.id AND m.club_id = ? AND m.status = 1" +
+                        cond + " ORDER BY m.role DESC, u.id LIMIT 500", clubId);
+        Set<Long> seated = seatedUserIds();
+        int robotCount = 0;
+        for (Map<String, Object> r : rows) {
+            long uid = ((Number) r.get("userId")).longValue();
+            r.put("inRoom", seated.contains(uid));
+            if (((Number) r.get("isRobot")).intValue() == 1) robotCount++;
+        }
+        Integer total = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM dz_club_member WHERE club_id = ? AND status = 1", Integer.class, clubId);
+        Integer robots = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM dz_user u JOIN dz_club_member m ON m.user_id = u.id " +
+                        "WHERE m.club_id = ? AND m.status = 1 AND u.is_robot = 1", Integer.class, clubId);
+        return Map.of("code", 0, "members", rows,
+                "total", total == null ? rows.size() : total,
+                "robotCount", robots == null ? robotCount : robots);
+    }
+
+    /**
+     * 批量随机换头像(对齐扯旋 randomAssignAvatars,一人一图):
+     * urls 去重后必须 ≥ 该俱乐部机器人数,洗牌后一一分配,绝不重复。
+     */
+    public Map<String, Object> assignAvatars(long clubId, List<String> urls) {
+        if (urls == null || urls.isEmpty()) return Map.of("code", 1, "msg", "没有可用的头像图片");
+        List<Long> ids = jdbc.queryForList(
+                "SELECT u.id FROM dz_user u JOIN dz_club_member m ON m.user_id = u.id AND m.club_id = ? AND m.status = 1 " +
+                        "WHERE u.is_robot = 1 ORDER BY u.id", Long.class, clubId);
+        if (ids.isEmpty()) return Map.of("code", 1, "msg", "该俱乐部没有机器人");
+        List<String> pool = new ArrayList<>(new java.util.LinkedHashSet<>(urls)); // URL 去重
+        if (pool.size() < ids.size()) {
+            return Map.of("code", 1, "msg", "头像图片不足:去重后 " + pool.size() + " 张,机器人 "
+                    + ids.size() + " 个。一人一图,请补足后再分配");
+        }
+        java.util.Collections.shuffle(pool, ThreadLocalRandom.current());
+        int changed = 0;
+        for (int i = 0; i < ids.size(); i++) {
+            jdbc.update("UPDATE dz_user SET avatar = ? WHERE id = ?", pool.get(i), ids.get(i));
+            changed++;
+        }
+        log.info("机器人批量换头像: clubId={}, changed={}", clubId, changed);
+        return Map.of("code", 0, "changed", changed);
+    }
+
+    /** 一键随机改名(德州昵称词库,同俱乐部机器人不重名) */
+    public Map<String, Object> rename(long clubId) {
+        List<Long> ids = jdbc.queryForList(
+                "SELECT u.id FROM dz_user u JOIN dz_club_member m ON m.user_id = u.id AND m.club_id = ? AND m.status = 1 " +
+                        "WHERE u.is_robot = 1 ORDER BY u.id", Long.class, clubId);
+        if (ids.isEmpty()) return Map.of("code", 1, "msg", "该俱乐部没有机器人");
+        Set<String> used = new HashSet<>();
+        int changed = 0;
+        for (long uid : ids) {
+            String nick = randomNickname(used);
+            jdbc.update("UPDATE dz_user SET nickname = ? WHERE id = ?", nick, uid);
+            jdbc.update("UPDATE dz_club_member SET nickname = ? WHERE club_id = ? AND user_id = ?", nick, clubId, uid);
+            changed++;
+        }
+        log.info("机器人一键改名: clubId={}, changed={}", clubId, changed);
+        return Map.of("code", 0, "changed", changed);
     }
 
     /** 一键补分:给该俱乐部全部机器人各加 amount 积分 */

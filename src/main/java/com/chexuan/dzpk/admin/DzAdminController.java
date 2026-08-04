@@ -261,6 +261,36 @@ public class DzAdminController {
         return robotAdmin.list(clubId);
     }
 
+    /** 俱乐部全部成员(?type=all|human|robot 分类) */
+    @GetMapping("/clubs/{clubId}/members")
+    public Map<String, Object> clubMembers(@RequestHeader(value = "X-Admin-Token", required = false) String token,
+                                           @PathVariable long clubId,
+                                           @RequestParam(value = "type", defaultValue = "all") String type) {
+        if (!authed(token)) return deny();
+        return robotAdmin.members(clubId, type);
+    }
+
+    /** 机器人批量换头像:{urls:[...]}(一人一图,URL 去重后须 ≥ 机器人数) */
+    @PostMapping("/clubs/{clubId}/robots/avatars")
+    public Map<String, Object> assignRobotAvatars(@RequestHeader(value = "X-Admin-Token", required = false) String token,
+                                                  @PathVariable long clubId, @RequestBody Map<String, Object> body) {
+        if (!authed(token)) return deny();
+        Object urls = body.get("urls");
+        List<String> list = new java.util.ArrayList<>();
+        if (urls instanceof List<?> l) {
+            for (Object o : l) if (o != null && !String.valueOf(o).isBlank()) list.add(String.valueOf(o).trim());
+        }
+        return robotAdmin.assignAvatars(clubId, list);
+    }
+
+    /** 机器人一键随机改名(德州昵称词库) */
+    @PostMapping("/clubs/{clubId}/robots/rename")
+    public Map<String, Object> renameRobots(@RequestHeader(value = "X-Admin-Token", required = false) String token,
+                                            @PathVariable long clubId) {
+        if (!authed(token)) return deny();
+        return robotAdmin.rename(clubId);
+    }
+
     /** 一键补分:{amount} → 该俱乐部全部机器人各加 amount 积分 */
     @PostMapping("/clubs/{clubId}/robots/topup")
     public Map<String, Object> topUpRobots(@RequestHeader(value = "X-Admin-Token", required = false) String token,
