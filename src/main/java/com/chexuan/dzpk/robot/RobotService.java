@@ -39,8 +39,17 @@ public class RobotService {
     public static final long ROBOT_ID_BASE = 800_000_001L;
 
     private static final String[] NICKNAMES = {
-            "老K", "菠萝", "石头", "阿豪", "肥猫", "夜风", "大米", "阿乐", "秃鹰", "小马"
+            "老K", "菠萝", "石头", "阿豪", "肥猫", "夜风", "大米", "阿乐", "秃鹰", "小马",
+            "阿肥", "老猫", "大炮", "小辣椒", "阿坤", "东哥", "海王", "六指", "阿灿", "胖虎",
+            "老狼", "阿飞", "皮蛋", "大圣", "铁头", "阿宝", "老酒", "斧头", "阿杰", "闪电"
     };
+
+    /** 机器人头像池(前端同域静态资源,坐下广播带给全桌) */
+    private static final int AVATAR_POOL = 16;
+
+    private static String randomRobotAvatar() {
+        return "/assets/table/heads/head_" + (1 + ThreadLocalRandom.current().nextInt(AVATAR_POOL)) + ".png";
+    }
 
     private final DzRoomManager roomManager;
     private final DzGameService gameService;
@@ -106,6 +115,11 @@ public class RobotService {
     }
 
     public boolean isRobot(long userId) {
+        return isRobotId(userId);
+    }
+
+    /** 静态判断(引擎豁免机器人经济/俱乐部限制用,避免 bean 循环依赖) */
+    public static boolean isRobotId(long userId) {
         return userId >= ROBOT_ID_BASE && userId < ROBOT_ID_BASE + 1_000_000L;
     }
 
@@ -151,6 +165,66 @@ public class RobotService {
         } else if (msg.getType() == MsgType.ERROR) {
             log.debug("机器人收到错误: userId={}, {}", userId, dataMap(msg).get("msg"));
         }
+    }
+
+    // ================================================================
+    // 管理台一键生成(俱乐部房测试用,不受自动补位 fill-count/大厅限制)
+    // ================================================================
+
+    /** 向指定房间(含俱乐部房)生成 count 个机器人:随机昵称+头像,坐空位并带入,进牌局自动打 */
+    public synchronized Map<String, Object> spawnRobots(long roomId, int count) {
+        DzRoom room = roomManager.get(roomId);
+        if (room == null) return Map.of("code", 1, "msg", "房间不存在");
+        Set<Long> robots = roomRobots.computeIfAbsent(roomId, k -> ConcurrentHashMap.newKeySet());
+        Set<Integer> reserved = reservedSeats.computeIfAbsent(roomId, k -> ConcurrentHashMap.newKeySet());
+        // 清理已落座的预留(俱乐部房不走 fillCheck,预留标记在这里回收)
+        reserved.removeIf(i -> i < room.getMaxPlayers() && room.getSeats()[i] != null);
+        int spawned = 0;
+        for (int n = 0; n < Math.max(1, count); n++) {
+            int freeSeat = -1;
+            for (int i = 0; i < room.getMaxPlayers(); i++) {
+                if (room.getSeats()[i] == null && !reserved.contains(i)) { freeSeat = i; break; }
+            }
+            if (freeSeat == -1) break; // 没空位了
+            reserved.add(freeSeat);
+            long robotId = idGen.getAndIncrement();
+            String nick = NICKNAMES[ThreadLocalRandom.current().nextInt(NICKNAMES.length)]
+                    + (100 + ThreadLocalRandom.current().nextInt(900));
+            robots.add(robotId);
+            long buyin = randomBuyin(room);
+            log.info("管理台生成机器人: roomId={}, robotId={}, nick={}, seat={}, buyin={}",
+                    roomId, robotId, nick, freeSeat, buyin);
+            gameService.enterRoom(roomId, robotId, nick);
+            gameService.sitDown(roomId, robotId, freeSeat, null, randomRobotAvatar());
+            gameService.buyIn(roomId, robotId, buyin);
+            spawned++;
+        }
+        return Map.of("code", 0, "spawned", spawned, "total", robots.size());
+    }
+
+    /** 清掉指定房间的全部机器人(牌局中的先标记站起,局末落地) */
+    public synchronized Map<String, Object> clearRobots(long roomId) {
+        Set<Long> robots = roomRobots.remove(roomId);
+        reservedSeats.remove(roomId);
+        int n = robots == null ? 0 : robots.size();
+        if (robots != null) {
+            for (long robotId : robots) {
+                gameService.standUp(roomId, robotId);
+                gameService.leaveRoom(roomId, robotId);
+                holeCards.remove(robotId);
+            }
+        }
+        log.info("管理台清场机器人: roomId={}, count={}", roomId, n);
+        return Map.of("code", 0, "cleared", n);
+    }
+
+    /** 各房间机器人分布(管理台展示) */
+    public Map<String, Object> listRobots() {
+        Map<String, Object> byRoom = new java.util.LinkedHashMap<>();
+        roomRobots.forEach((roomId, ids) -> {
+            if (!ids.isEmpty()) byRoom.put(String.valueOf(roomId), ids.size());
+        });
+        return Map.of("code", 0, "rooms", byRoom);
     }
 
     // ================================================================

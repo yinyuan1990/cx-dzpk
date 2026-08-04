@@ -171,6 +171,8 @@ public class DzGameService {
 
     /** 带入扣款,false=余额/积分不足 */
     private boolean debitBring(DzRoom room, long userId, long amount) {
+        // 机器人不走经济体系(筹码是"空气",带入/退筹都不入账,不污染俱乐部积分/钱包)
+        if (com.chexuan.dzpk.robot.RobotService.isRobotId(userId)) return true;
         if (clubEconomy(room)) {
             return clubService.debitScoreForGame(room.getClubId(), userId, amount, room.getRoomId());
         }
@@ -180,6 +182,7 @@ public class DzGameService {
     /** 退筹/罚金入账(scoreType: 31退筹 32罚金收) */
     private void creditBack(DzRoom room, long userId, long amount, int scoreType, String remark) {
         if (amount <= 0) return;
+        if (com.chexuan.dzpk.robot.RobotService.isRobotId(userId)) return;
         if (clubEconomy(room)) {
             clubService.creditScoreForGame(room.getClubId(), userId, amount, scoreType, remark);
         } else {
@@ -285,7 +288,9 @@ public class DzGameService {
                 return;
             }
             // 俱乐部房:仅成员可坐;群主/管理员不能玩(对齐扯旋 2026-07-25);群主钻石不足拒坐
-            if (room.getClubId() > 0 && clubService != null) {
+            // 机器人豁免(管理台一键生成陪打,不占俱乐部成员/积分体系)
+            boolean robotSit = com.chexuan.dzpk.robot.RobotService.isRobotId(userId);
+            if (room.getClubId() > 0 && clubService != null && !robotSit) {
                 if (!clubService.isMember(room.getClubId(), userId)) {
                     sendError(userId, roomId, "你不是该俱乐部成员,无法坐下");
                     return;
@@ -310,12 +315,13 @@ public class DzGameService {
                 sendError(userId, roomId, deny);
                 return;
             }
-            // GPS 防火牌(对齐扯旋):开了 gpsLimitOn 的桌,与桌上每人距离须达标
-            if (room.getRules() != null && room.getRules().isGpsLimitOn() && gpsService != null) {
+            // GPS 防火牌(对齐扯旋):开了 gpsLimitOn 的桌,与桌上每人距离须达标(机器人无 GPS,豁免)
+            if (!robotSit && room.getRules() != null && room.getRules().isGpsLimitOn() && gpsService != null) {
                 double minM = cfgLong("gps_min_distance_m", 100);
                 long maxAgeMs = cfgLong("gps_max_age_secs", 90) * 1000L;
                 for (DzPlayer sp : room.getSeats()) {
                     if (sp == null || sp.getUserId() == userId) continue;
+                    if (com.chexuan.dzpk.robot.RobotService.isRobotId(sp.getUserId())) continue;
                     String gpsDeny = gpsService.checkPair(userId, sp.getUserId(), minM, maxAgeMs);
                     if (gpsDeny != null) {
                         sendError(userId, roomId, gpsDeny);

@@ -36,6 +36,7 @@ public class DzAdminController {
     private final com.chexuan.dzpk.gift.DzGiftService giftService;
     private final com.chexuan.dzpk.db.DiamondService diamondService;
     private final org.springframework.jdbc.core.JdbcTemplate jdbc;
+    private final com.chexuan.dzpk.robot.RobotService robotService;
 
     /** token → 过期时间戳 */
     private final Map<String, Long> tokens = new ConcurrentHashMap<>();
@@ -47,7 +48,8 @@ public class DzAdminController {
                              DzGameService gameService, WsSessionRegistry registry,
                              com.chexuan.dzpk.gift.DzGiftService giftService,
                              com.chexuan.dzpk.db.DiamondService diamondService,
-                             org.springframework.jdbc.core.JdbcTemplate jdbc) {
+                             org.springframework.jdbc.core.JdbcTemplate jdbc,
+                             com.chexuan.dzpk.robot.RobotService robotService) {
         this.configService = configService;
         this.roomManager = roomManager;
         this.gameService = gameService;
@@ -55,6 +57,7 @@ public class DzAdminController {
         this.giftService = giftService;
         this.diamondService = diamondService;
         this.jdbc = jdbc;
+        this.robotService = robotService;
     }
 
     // ==================== 登录 ====================
@@ -218,6 +221,38 @@ public class DzAdminController {
                 "onlineCount", registry.onlineCount(),
                 "roomCount", rooms.size(),
                 "rooms", rooms);
+    }
+
+    // ==================== 机器人(一键生成,俱乐部房测试用) ====================
+
+    /** 各房间机器人分布 */
+    @GetMapping("/robots")
+    public Map<String, Object> robots(@RequestHeader(value = "X-Admin-Token", required = false) String token) {
+        if (!authed(token)) return deny();
+        return robotService.listRobots();
+    }
+
+    /** 一键生成:{roomId, count} → 随机昵称/头像坐空位并带入(俱乐部房豁免成员/积分限制) */
+    @PostMapping("/robots/spawn")
+    public Map<String, Object> spawnRobots(@RequestHeader(value = "X-Admin-Token", required = false) String token,
+                                           @RequestBody Map<String, Object> body) {
+        if (!authed(token)) return deny();
+        long roomId = parseLongOr(String.valueOf(body.get("roomId")), 0);
+        int count = (int) parseLongOr(String.valueOf(body.getOrDefault("count", 1)), 1);
+        if (roomId <= 0) return Map.of("code", 1, "msg", "roomId 非法");
+        Map<String, Object> res = robotService.spawnRobots(roomId, count);
+        log.info("管理后台生成机器人: roomId={}, count={}, res={}", roomId, count, res);
+        return res;
+    }
+
+    /** 清掉指定房间全部机器人:{roomId} */
+    @PostMapping("/robots/clear")
+    public Map<String, Object> clearRobots(@RequestHeader(value = "X-Admin-Token", required = false) String token,
+                                           @RequestBody Map<String, Object> body) {
+        if (!authed(token)) return deny();
+        long roomId = parseLongOr(String.valueOf(body.get("roomId")), 0);
+        if (roomId <= 0) return Map.of("code", 1, "msg", "roomId 非法");
+        return robotService.clearRobots(roomId);
     }
 
     @PostMapping("/rooms/{roomId}/dismiss")
