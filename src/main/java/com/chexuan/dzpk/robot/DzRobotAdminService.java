@@ -36,16 +36,18 @@ public class DzRobotAdminService {
     private final DzRoomManager roomManager;
     private final DzGameService gameService;
     private final RobotService robotService;
+    private final com.chexuan.dzpk.db.DiamondService diamondService;
 
     public DzRobotAdminService(JdbcTemplate jdbc, RobotRegistry registry, DzClubService clubService,
                                DzRoomManager roomManager, @Lazy DzGameService gameService,
-                               RobotService robotService) {
+                               RobotService robotService, com.chexuan.dzpk.db.DiamondService diamondService) {
         this.jdbc = jdbc;
         this.registry = registry;
         this.clubService = clubService;
         this.roomManager = roomManager;
         this.gameService = gameService;
         this.robotService = robotService;
+        this.diamondService = diamondService;
     }
 
     // ==================== 德州昵称词库(纯中文德州术语风,对齐扯旋"按语料分桶"思路) ====================
@@ -230,32 +232,38 @@ public class DzRobotAdminService {
     }
 
     /**
-     * 俱乐部全部成员(分类:all=全部 / human=真人 / robot=机器人):
+     * 俱乐部全部成员(分类:all=全部 / human=真人 / robot=机器人;分页):
      * 昵称/头像/角色/积分/机器人标记/是否在桌。
      */
-    public Map<String, Object> members(long clubId, String type) {
+    public Map<String, Object> members(long clubId, String type, int page, int size) {
         String cond = "robot".equalsIgnoreCase(type) ? " AND u.is_robot = 1"
                 : "human".equalsIgnoreCase(type) ? " AND u.is_robot = 0" : "";
+        int p = Math.max(0, page);
+        int s = Math.max(1, Math.min(100, size));
         List<Map<String, Object>> rows = jdbc.queryForList(
                 "SELECT u.id AS userId, u.nickname, u.avatar, u.number_id AS numberId, u.is_robot AS isRobot, " +
                         "m.role, m.score " +
                         "FROM dz_user u JOIN dz_club_member m ON m.user_id = u.id AND m.club_id = ? AND m.status = 1" +
-                        cond + " ORDER BY m.role DESC, u.id LIMIT 500", clubId);
+                        cond + " ORDER BY m.role DESC, u.id LIMIT " + s + " OFFSET " + (p * s), clubId);
         Set<Long> seated = seatedUserIds();
-        int robotCount = 0;
         for (Map<String, Object> r : rows) {
             long uid = ((Number) r.get("userId")).longValue();
             r.put("inRoom", seated.contains(uid));
-            if (((Number) r.get("isRobot")).intValue() == 1) robotCount++;
         }
+        // filteredTotal=当前分类的总数(分页用);total/robotCount=全体统计(顶部展示)
+        Integer filtered = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM dz_user u JOIN dz_club_member m ON m.user_id = u.id " +
+                        "WHERE m.club_id = ? AND m.status = 1" + cond, Integer.class, clubId);
         Integer total = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM dz_club_member WHERE club_id = ? AND status = 1", Integer.class, clubId);
         Integer robots = jdbc.queryForObject(
                 "SELECT COUNT(*) FROM dz_user u JOIN dz_club_member m ON m.user_id = u.id " +
                         "WHERE m.club_id = ? AND m.status = 1 AND u.is_robot = 1", Integer.class, clubId);
         return Map.of("code", 0, "members", rows,
+                "filteredTotal", filtered == null ? rows.size() : filtered,
+                "page", p, "size", s,
                 "total", total == null ? rows.size() : total,
-                "robotCount", robots == null ? robotCount : robots);
+                "robotCount", robots == null ? 0 : robots);
     }
 
     /**
@@ -342,6 +350,21 @@ public class DzRobotAdminService {
         long clubId = room.getClubId();
         if (clubId <= 0) return Map.of("code", 1, "msg", "只支持俱乐部房间(大厅房有自动陪打)");
 
+        // ★ 预检群主钻石(坐下是异步的,失败只会私发给机器人、接口感知不到——
+        //   这里提前用与 sitDown 完全相同的规则拦下来,给管理台一个明确的错误提示)
+        if (room.getSettleTimeMins() > 0) {
+            long sitCost = gameService.ownerDiamondCostFor(room);
+            if (sitCost > 0) {
+                long owner = clubService.ownerUserId(clubId);
+                if (owner > 0 && diamondService.hasMainAccount(owner)
+                        && diamondService.balance(owner) < sitCost) {
+                    return Map.of("code", 1, "msg", "群主钻石不足(需 " + sitCost + " 钻,当前 "
+                            + diamondService.balance(owner) + " 钻),机器人和真人都无法坐下。"
+                            + "请到「用户管理」给群主(ID " + owner + ")充钻石");
+                }
+            }
+        }
+
         // 空闲机器人 = 该俱乐部机器人 - 已在任何桌上的
         List<Map<String, Object>> pool = jdbc.queryForList(
                 "SELECT u.id AS userId, u.nickname, u.avatar FROM dz_user u " +
@@ -356,7 +379,9 @@ public class DzRobotAdminService {
         for (int i = 0; i < room.getMaxPlayers(); i++) {
             if (room.getSeats()[i] == null) freeSeats.add(i);
         }
+        if (freeSeats.isEmpty()) return Map.of("code", 1, "msg", "桌上没有空位了");
 
+        // 实际派数 = min(请求数, 空闲机器人数, 空座位数):6人桌已坐1人再派8个 → 只上5个
         int n = Math.min(Math.max(1, count), Math.min(pool.size(), freeSeats.size()));
         int sent = 0;
         for (int i = 0; i < n; i++) {
@@ -378,7 +403,11 @@ public class DzRobotAdminService {
             sent++;
             log.info("机器人上桌: roomId={}, userId={}, nick={}, seat={}, buyin={}", roomId, uid, nick, seat, buyin);
         }
-        return Map.of("code", 0, "deployed", sent, "poolIdle", pool.size() - sent);
+        String note = sent < count
+                ? (freeSeats.size() < pool.size() ? "空位只有 " + freeSeats.size() + " 个" : "空闲机器人只有 " + pool.size() + " 个")
+                : "";
+        return Map.of("code", 0, "deployed", sent, "requested", count,
+                "poolIdle", pool.size() - sent, "note", note);
     }
 
     private long randomBuyin(DzRoom room) {

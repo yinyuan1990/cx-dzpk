@@ -13,10 +13,13 @@ const msg = ref('')
 const busy = ref(false)
 let timer
 
-// 成员列表(当前俱乐部,分类:all/human/robot)
+// 成员列表(当前俱乐部,分类:all/human/robot,分页)
 const members = ref([])
 const memberType = ref('all')
 const memberStats = ref({ total: 0, robotCount: 0 })
+const memberPage = ref(0)
+const memberFiltered = ref(0)
+const PAGE_SIZE = 20
 const genCount = ref(4)
 const genScore = ref(1000000)  // 初始积分(分):默认 1 万元
 const topupAmount = ref(1000000)
@@ -37,15 +40,30 @@ async function load() {
 }
 
 async function loadMembers() {
-  const res = await api.clubMembers(current.value.clubId, memberType.value)
+  const res = await api.clubMembers(current.value.clubId, memberType.value, memberPage.value, PAGE_SIZE)
   if (res.code === 0) {
     members.value = res.members || []
     memberStats.value = { total: res.total || 0, robotCount: res.robotCount || 0 }
+    memberFiltered.value = res.filteredTotal || 0
+    // 删光当前页后回退到上一页
+    if (!members.value.length && memberPage.value > 0) {
+      memberPage.value--
+      await loadMembers()
+    }
   }
 }
 
+const memberPages = computed(() => Math.max(1, Math.ceil(memberFiltered.value / PAGE_SIZE)))
+
 function switchType(t) {
   memberType.value = t
+  memberPage.value = 0
+  loadMembers()
+}
+
+function gotoPage(p) {
+  if (p < 0 || p >= memberPages.value) return
+  memberPage.value = p
   loadMembers()
 }
 
@@ -53,6 +71,7 @@ async function openClub(c) {
   current.value = c
   members.value = []
   memberType.value = 'all'
+  memberPage.value = 0
   await loadMembers()
 }
 
@@ -177,9 +196,15 @@ async function spawn(roomId, count) {
   busy.value = true
   try {
     const res = await api.spawnRobots(Number(roomId), Number(count) || 1)
-    if (res.code === 0) toast(`已派 ${res.deployed} 个机器人上桌(池内还剩 ${res.poolIdle} 个空闲)`)
-    else toast(res.msg || '派桌失败')
+    if (res.code === 0) {
+      const extra = res.note ? `(${res.note},请求 ${res.requested} 实派 ${res.deployed})` : ''
+      toast(`已派 ${res.deployed} 个机器人上桌${extra},池内还剩 ${res.poolIdle} 个空闲`)
+    } else {
+      toast(res.msg || '派桌失败')
+    }
     setTimeout(load, 800)
+  } catch (e) {
+    toast('派桌失败:' + (e.message || e))
   } finally {
     busy.value = false
   }
@@ -293,6 +318,11 @@ onUnmounted(() => clearInterval(timer))
             </tr>
           </tbody>
         </table>
+        <div v-if="memberPages > 1" class="pager">
+          <button class="pg-btn" :disabled="memberPage === 0" @click="gotoPage(memberPage - 1)">‹ 上一页</button>
+          <span class="pg-info">{{ memberPage + 1 }} / {{ memberPages }} 页(共 {{ memberFiltered }} 人)</span>
+          <button class="pg-btn" :disabled="memberPage >= memberPages - 1" @click="gotoPage(memberPage + 1)">下一页 ›</button>
+        </div>
         <p v-else class="empty small">
           {{ memberType === 'robot' ? '还没有机器人,点上方「一键生成」。生成的是真实账号(德州风随机昵称/头像),已入会并上积分,打牌走真人流程、带入扣自己积分。' : '暂无成员' }}
         </p>
@@ -409,6 +439,13 @@ td { padding: 4px 8px; border-top: 1px solid #1c2833; }
 .mav { width: 26px; height: 26px; border-radius: 50%; object-fit: cover; display: block; }
 .is-bot { color: #6cb8f0; }
 .is-human { color: #cbd6e0; }
+.pager { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 12px; }
+.pg-btn {
+  background: #1c2833; color: #9fb0c0; padding: 5px 14px;
+  font-size: 12px; border-radius: 6px;
+}
+.pg-btn:disabled { opacity: 0.4; }
+.pg-info { color: #7d8fa0; font-size: 12px; }
 .ok { color: #6cc06c; }
 .idle { color: #7d8fa0; }
 </style>

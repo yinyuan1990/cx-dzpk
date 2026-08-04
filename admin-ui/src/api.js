@@ -48,7 +48,8 @@ export const api = {
   clubs: () => req('GET', '/clubs'),
   robots: () => req('GET', '/robots'),
   clubRobots: (clubId) => req('GET', `/clubs/${clubId}/robots`),
-  clubMembers: (clubId, type) => req('GET', `/clubs/${clubId}/members?type=${type || 'all'}`),
+  clubMembers: (clubId, type, page, size) =>
+    req('GET', `/clubs/${clubId}/members?type=${type || 'all'}&page=${page || 0}&size=${size || 20}`),
   generateRobots: (clubId, count, initScore) => req('POST', `/clubs/${clubId}/robots/generate`, { count, initScore }),
   topUpRobots: (clubId, amount) => req('POST', `/clubs/${clubId}/robots/topup`, { amount }),
   renameRobots: (clubId) => req('POST', `/clubs/${clubId}/robots/rename`, {}),

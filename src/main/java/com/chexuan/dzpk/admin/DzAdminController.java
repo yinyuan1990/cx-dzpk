@@ -261,13 +261,15 @@ public class DzAdminController {
         return robotAdmin.list(clubId);
     }
 
-    /** 俱乐部全部成员(?type=all|human|robot 分类) */
+    /** 俱乐部全部成员(?type=all|human|robot 分类,page/size 分页) */
     @GetMapping("/clubs/{clubId}/members")
     public Map<String, Object> clubMembers(@RequestHeader(value = "X-Admin-Token", required = false) String token,
                                            @PathVariable long clubId,
-                                           @RequestParam(value = "type", defaultValue = "all") String type) {
+                                           @RequestParam(value = "type", defaultValue = "all") String type,
+                                           @RequestParam(value = "page", defaultValue = "0") int page,
+                                           @RequestParam(value = "size", defaultValue = "20") int size) {
         if (!authed(token)) return deny();
-        return robotAdmin.members(clubId, type);
+        return robotAdmin.members(clubId, type, page, size);
     }
 
     /** 机器人批量换头像:{urls:[...]}(一人一图,URL 去重后须 ≥ 机器人数) */

@@ -860,7 +860,7 @@ public class DzGameService {
      *   owner_period_diamond_tiers JSON 数组按「结算分钟 + 大盲」精确匹配;
      *   没匹配到 → 回退单一兜底值 owner_period_diamond_cost。
      */
-    private long ownerDiamondCostFor(DzRoom room) {
+    public long ownerDiamondCostFor(DzRoom room) {
         String json = cfg != null ? cfg.getStr("owner_period_diamond_tiers", "") : "";
         if (json != null && !json.isBlank()) {
             try {
