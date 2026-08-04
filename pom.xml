@@ -53,6 +53,12 @@
             <artifactId>lombok</artifactId>
             <optional>true</optional>
         </dependency>
+        <!-- MinIO 对象存储(注册头像;聊天独立出来后媒体也走这套),版本对齐扯旋 -->
+        <dependency>
+            <groupId>io.minio</groupId>
+            <artifactId>minio</artifactId>
+            <version>8.5.7</version>
+        </dependency>
         <!-- 与主服(chexuan-springboot)同款 JWT 库,共享密钥本地验签 -->
         <dependency>
             <groupId>io.jsonwebtoken</groupId>
