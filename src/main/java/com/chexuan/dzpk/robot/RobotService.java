@@ -262,7 +262,9 @@ public class RobotService {
             return;
         }
         boolean humanInRoom = room.getMembers().keySet().stream().anyMatch(uid -> !isRobot(uid));
-        if (!humanInRoom && robots != null && !robots.isEmpty()) {
+        // 俱乐部房的机器人是管理台手动派的,真人离开也继续打(手动撤回/房间解散才走);
+        // 只有大厅陪打房(clubId=0)才"真人全走自动撤场"。
+        if (!humanInRoom && robots != null && !robots.isEmpty() && room.getClubId() <= 0) {
             log.info("真人全部离开,机器人撤场: roomId={}, robots={}", roomId, robots.size());
             for (long robotId : robots) {
                 gameService.standUp(roomId, robotId);
