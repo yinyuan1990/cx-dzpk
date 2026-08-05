@@ -311,6 +311,7 @@ public class DzClubService {
             case 18 -> "礼物赠送";
             case 19, 20 -> "逃跑惩罚";
             case 21 -> "核销积分";
+            case 23 -> "查看下一张";
             default -> "未知";
         };
     }
@@ -468,6 +469,11 @@ public class DzClubService {
     /** 送礼扣分(type=18 礼物赠送,对齐扯旋 GiftService CLUB_SCORE 分支),积分不足抛异常;返回扣后余额 */
     public long debitScoreForGift(long clubId, long userId, long cost, String remark) {
         return changeScore(clubId, userId, -cost, 18, 0, remark);
+    }
+
+    /** 看下一张牌扣分(type=23,对齐老德州"花费查看未发公共牌"),积分不足抛异常;返回扣后余额 */
+    public long debitScoreForRabbit(long clubId, long userId, long cost, long roomId) {
+        return changeScore(clubId, userId, -cost, 23, roomId, "查看下一张牌 room=" + roomId);
     }
 
     /** 罚金扣分(type=19 逃跑惩罚,玩家侧;退筹已入账后再扣,余额必够) */

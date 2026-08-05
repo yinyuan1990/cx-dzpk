@@ -72,6 +72,12 @@ public class DzRoom {
      */
     private long firstHandStartMs;
 
+    // ==================== 看下一张牌(Rabbit,对齐老德州148) ====================
+    /** 看下一张窗口截止(0=不可看;弃牌提前结束且公共牌未满时开窗到下一手前) */
+    private long rabbitDeadline;
+    /** 本手已被付费翻出的"下一张"们(广播/续翻用,新一手清空) */
+    private final java.util.List<com.chexuan.dzpk.game.card.Card> rabbitCards = new java.util.ArrayList<>();
+
     // ==================== 一手牌的牌局状态 ====================
 
     private GameStage stage = GameStage.WAITING;

@@ -210,7 +210,7 @@ public class RobotService {
         if (robots != null) {
             for (long robotId : robots) {
                 gameService.standUp(roomId, robotId);
-                gameService.leaveRoom(roomId, robotId);
+                gameService.leaveRoom(roomId, robotId, true);
                 holeCards.remove(robotId);
             }
         }
@@ -291,7 +291,7 @@ public class RobotService {
             log.info("真人全部离开,机器人撤场: roomId={}, robots={}", roomId, robots.size());
             for (long robotId : robots) {
                 gameService.standUp(roomId, robotId);
-                gameService.leaveRoom(roomId, robotId);
+                gameService.leaveRoom(roomId, robotId, true);
                 holeCards.remove(robotId);
             }
             roomRobots.remove(roomId);
@@ -357,7 +357,7 @@ public class RobotService {
     /** 机器人站起并离桌(牌局中先 pending 局末落地),从驱动表移除 */
     private void removeRobotFromTable(long roomId, long robotId) {
         gameService.standUp(roomId, robotId);
-        gameService.leaveRoom(roomId, robotId);
+        gameService.leaveRoom(roomId, robotId, true);
         Set<Long> robots = roomRobots.get(roomId);
         if (robots != null) robots.remove(robotId);
         holeCards.remove(robotId);

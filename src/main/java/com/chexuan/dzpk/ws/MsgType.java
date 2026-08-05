@@ -45,6 +45,9 @@ public final class MsgType {
     public static final int CLUB_SCORE_LOGS = 431;  // {clubId, userId?(群主/管理员可查他人), limit?}
     public static final int CLUB_UPDATE = 433;      // {clubId, name, remark, avatar, notice}(群主/管理员)
     public static final int GPS_REPORT = 432;       // {lat, lng} 前端定时上报定位(GPS 防火牌用,无应答)
+    public static final int NEXT_CARD = 434;        // 看下一张牌(对齐老德州148:弃牌提前结束后付费翻未发公共牌)
+    public static final int SHOW_CARDS = 435;       // 秀牌 {mode:1第1张|2第2张|3两张}(对齐老德州43,免费亮自己)
+    public static final int HAND_REVIEW = 436;      // 牌型回顾 {handNo?:-1=最近一手}(简化版:每手静态快照)
 
     // ==================== S → C ====================
     public static final int LOGIN_RES = 451;
@@ -92,6 +95,9 @@ public final class MsgType {
     public static final int ROOM_GIFT = 491;           // 房间礼物广播(对齐扯旋351) {fromUserId,fromSeat,toUserId?,toSeat?,giftKey,cost,...}
     public static final int ROOM_OPTIONS_RES = 492;    // 建房参数可选档 {settleTimes,blinds,opTimes,maxRates,minTimes,rakePercents}
     public static final int CLUB_UPDATE_RES = 493;     // {clubId, name, remark, avatar, notice}
+    public static final int NEXT_CARD_BC = 494;        // 看下一张广播 {byUserId,byNick,newCards,rabbitCards,boardSize}
+    public static final int SHOW_CARDS_BC = 495;       // 秀牌广播 {userId,seat,mode,cards:[{idx,card}]}
+    public static final int HAND_REVIEW_RES = 496;     // 牌型回顾 {handNo,minHandNo,maxHandNo,board,players:[...]}
 
     public static final int ERROR = 499;
 }

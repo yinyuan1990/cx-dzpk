@@ -165,6 +165,66 @@ public class DzRecordStore {
                 ts};
     }
 
+    /**
+     * 牌型回顾(老德州90简化版):某一手的静态快照。
+     * handNo<=0 = 最近一手;可见性:请求者自己的手牌总是给,他人只有摊牌(showdown=1)才给。
+     * 返回 {handNo, minHandNo, maxHandNo, board, players:[{seat,nickname,userId,holeCards,handName,netWin,folded,showdown}]}
+     */
+    public java.util.Map<String, Object> handReview(long roomId, long handNo, long viewerUserId) {
+        java.util.Map<String, Object> out = new java.util.LinkedHashMap<>();
+        out.put("handNo", 0L);
+        out.put("minHandNo", 0L);
+        out.put("maxHandNo", 0L);
+        out.put("board", "");
+        out.put("players", java.util.List.of());
+        if (jdbc == null) return out;
+        try {
+            java.util.Map<String, Object> range = jdbc.queryForMap(
+                    "SELECT COALESCE(MIN(hand_no),0) AS mn, COALESCE(MAX(hand_no),0) AS mx " +
+                            "FROM dz_hand_record WHERE room_id = ?", roomId);
+            long mn = ((Number) col2(range, "mn")).longValue();
+            long mx = ((Number) col2(range, "mx")).longValue();
+            out.put("minHandNo", mn);
+            out.put("maxHandNo", mx);
+            if (mx <= 0) return out;
+            long target = handNo <= 0 ? mx : Math.max(mn, Math.min(mx, handNo));
+            java.util.List<java.util.Map<String, Object>> rows = jdbc.queryForList(
+                    "SELECT user_id, nickname, seat, net_win, folded, showdown, hole_cards, board, hand_name " +
+                            "FROM dz_hand_record WHERE room_id = ? AND hand_no = ? ORDER BY seat", roomId, target);
+            out.put("handNo", target);
+            java.util.List<java.util.Map<String, Object>> players = new ArrayList<>();
+            for (java.util.Map<String, Object> r : rows) {
+                long uid = ((Number) col2(r, "user_id")).longValue();
+                boolean showdown = ((Number) col2(r, "showdown")).intValue() == 1;
+                Object board = col2(r, "board");
+                if (board != null && String.valueOf(out.get("board")).isEmpty()) {
+                    out.put("board", String.valueOf(board));
+                }
+                java.util.Map<String, Object> p = new java.util.LinkedHashMap<>();
+                p.put("userId", uid);
+                p.put("nickname", col2(r, "nickname"));
+                p.put("seat", ((Number) col2(r, "seat")).intValue());
+                p.put("netWin", ((Number) col2(r, "net_win")).longValue());
+                p.put("folded", ((Number) col2(r, "folded")).intValue() == 1);
+                p.put("showdown", showdown);
+                // 可见性(对齐老德州回顾):自己的牌总是可见;他人只有摊牌亮过才给
+                Object hole = col2(r, "hole_cards");
+                p.put("holeCards", (uid == viewerUserId || showdown) && hole != null ? hole : "");
+                p.put("handName", showdown || uid == viewerUserId ? col2(r, "hand_name") : null);
+                players.add(p);
+            }
+            out.put("players", players);
+        } catch (Exception e) {
+            log.error("牌型回顾查询失败: roomId={}, handNo={}", roomId, handNo, e);
+        }
+        return out;
+    }
+
+    private static Object col2(java.util.Map<String, Object> row, String key) {
+        Object v = row.get(key);
+        return v != null ? v : row.get(key.toUpperCase());
+    }
+
     /** 周期/站起结算记录(战绩权威盈亏) */
     public void saveSettleRecord(DzRoom room, DzPlayer p, String reason,
                                  long bringIn, long finalStack, long profit,

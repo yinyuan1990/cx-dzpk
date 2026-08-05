@@ -236,10 +236,20 @@ public class DzGameService {
     }
 
     public void leaveRoom(long roomId, long userId) {
+        leaveRoom(roomId, userId, false);
+    }
+
+    /** force=内部强制路径(机器人撤回/清房共用),跳过"牌局中未弃牌不能退房"拦截 */
+    public void leaveRoom(long roomId, long userId, boolean force) {
         DzRoom room = roomManager.get(roomId);
         if (room == null) return;
         roomWorker.submit(roomId, () -> {
             DzPlayer p = room.playerByUserId(userId);
+            // 对齐扯旋104:牌局进行中且未弃牌不能退出房间(避免人凭空消失影响轮转/比牌)
+            if (p != null && !force && room.inGame() && p.isInHand() && !p.isFolded()) {
+                sendError(userId, roomId, "游戏进行中,请先弃牌再离开");
+                return;
+            }
             if (p != null) {
                 doStandUp(room, p, "leave");
             }
@@ -351,12 +361,23 @@ public class DzGameService {
         });
     }
 
+    /** 补充带入防连点(对齐扯旋 116:同一玩家 2 秒内只处理一条,防双击重复扣积分) */
+    private final Map<Long, Long> buyInLastAt = new java.util.concurrent.ConcurrentHashMap<>();
+
     public void buyIn(long roomId, long userId, long amount) {
         DzRoom room = roomManager.get(roomId);
         if (room == null) {
             sendError(userId, roomId, "房间不存在");
             return;
         }
+        long nowMs = System.currentTimeMillis();
+        Long lastAt = buyInLastAt.get(userId);
+        if (lastAt != null && nowMs - lastAt < 2000) {
+            log.warn("带入防连点拦截: userId={}, 间隔={}ms, amount={}", userId, nowMs - lastAt, amount);
+            sendError(userId, roomId, "操作过于频繁,请稍后再试");
+            return;
+        }
+        buyInLastAt.put(userId, nowMs);
         roomWorker.submit(roomId, () -> {
             DzPlayer p = room.playerByUserId(userId);
             if (p == null) {
@@ -808,6 +829,9 @@ public class DzGameService {
         if (room.getFirstHandStartMs() == 0) {
             room.setFirstHandStartMs(System.currentTimeMillis());
         }
+        // 关看下一张窗口(新一手新牌堆)
+        room.setRabbitDeadline(0);
+        room.getRabbitCards().clear();
         room.getBoard().clear();
         room.setPots(new ArrayList<>());
         room.setCollectedPot(0);
@@ -1275,6 +1299,115 @@ public class DzGameService {
                 room.getRoomId(), leader.getUserId(), outHit, delta);
     }
 
+    // ==================== 看下一张 / 秀牌 / 牌型回顾(对齐老德州148/43/90简化版) ====================
+
+    /**
+     * 看下一张牌(对齐老德州148):弃牌提前结束后、下一手开始前,任何房内成员可付费翻未发公共牌。
+     * 没发翻牌一次翻 3 张,其余一次 1 张;一人付费全桌广播可见,可续翻到 5 张。
+     * 费用 = max(大盲/50, 1)(俱乐部房扣俱乐部积分;机器人/公开房免费)。
+     */
+    public void nextCard(long roomId, long userId) {
+        DzRoom room = roomManager.get(roomId);
+        if (room == null) {
+            sendError(userId, roomId, "房间不存在");
+            return;
+        }
+        roomWorker.submit(roomId, () -> {
+            if (!room.getMembers().containsKey(userId)) {
+                sendError(userId, roomId, "请先进入房间");
+                return;
+            }
+            int shown = room.getBoard().size() + room.getRabbitCards().size();
+            if (room.getRabbitDeadline() < System.currentTimeMillis() || shown >= 5) {
+                sendError(userId, roomId, "当前不能查看下一张");
+                return;
+            }
+            long cost = Math.max(room.getBb() / 50, 1);
+            if (clubEconomy(room) && !com.chexuan.dzpk.robot.RobotService.isRobotId(userId)
+                    && (robotRegistry == null || !robotRegistry.isRobot(userId))) {
+                try {
+                    clubService.debitScoreForRabbit(room.getClubId(), userId, cost, roomId);
+                } catch (Exception e) {
+                    sendError(userId, roomId, "俱乐部积分不足");
+                    return;
+                }
+            }
+            int dealCount = shown == 0 ? 3 : 1;
+            List<String> newCards = new ArrayList<>();
+            for (int i = 0; i < dealCount && room.getBoard().size() + room.getRabbitCards().size() < 5; i++) {
+                Card c = room.getDeck().deal();
+                room.getRabbitCards().add(c);
+                newCards.add(c.toString());
+            }
+            // 续翻延时窗(对齐老德州每次翻牌 +1.5s)
+            room.setRabbitDeadline(Math.max(room.getRabbitDeadline(), System.currentTimeMillis() + 1500));
+            List<String> all = new ArrayList<>();
+            for (Card c : room.getRabbitCards()) all.add(c.toString());
+            broadcaster.toRoom(roomId, GameMessage.create(MsgType.NEXT_CARD_BC, roomId, Map.of(
+                    "byUserId", userId,
+                    "byNick", room.getMembers().getOrDefault(userId, ""),
+                    "newCards", newCards,
+                    "rabbitCards", all,
+                    "boardSize", room.getBoard().size(),
+                    "cost", cost)));
+            log.info("看下一张: roomId={}, userId={}, cards={}, cost={}", roomId, userId, newCards, cost);
+        });
+    }
+
+    /**
+     * 秀牌(对齐老德州43):本手结束后(结算期~下一手前)自愿亮自己的手牌,免费。
+     * mode: 1=第1张 2=第2张 3=两张。全桌广播。
+     */
+    public void showCards(long roomId, long userId, int mode) {
+        DzRoom room = roomManager.get(roomId);
+        if (room == null) {
+            sendError(userId, roomId, "房间不存在");
+            return;
+        }
+        roomWorker.submit(roomId, () -> {
+            DzPlayer p = room.playerByUserId(userId);
+            if (p == null || p.getHoleCards() == null || p.getHoleCards().length < 2) {
+                sendError(userId, roomId, "没有可秀的手牌");
+                return;
+            }
+            if (room.getStage() != GameStage.SETTLING && room.getStage() != GameStage.WAITING) {
+                sendError(userId, roomId, "本手结束后才能秀牌");
+                return;
+            }
+            if (mode < 1 || mode > 3) {
+                sendError(userId, roomId, "参数非法");
+                return;
+            }
+            List<Map<String, Object>> cards = new ArrayList<>();
+            if (mode == 1 || mode == 3) {
+                cards.add(Map.of("idx", 0, "card", p.getHoleCards()[0].toString()));
+            }
+            if (mode == 2 || mode == 3) {
+                cards.add(Map.of("idx", 1, "card", p.getHoleCards()[1].toString()));
+            }
+            broadcaster.toRoom(roomId, GameMessage.create(MsgType.SHOW_CARDS_BC, roomId, Map.of(
+                    "userId", userId, "seat", p.getSeat(), "mode", mode, "cards", cards)));
+            log.info("秀牌: roomId={}, userId={}, mode={}", roomId, userId, mode);
+        });
+    }
+
+    /**
+     * 牌型回顾(老德州90的简化版):每手一张静态快照(公共牌+各玩家手牌/牌型/盈亏),
+     * 不做动作流回放。可见性:自己的牌总是可见,他人的只有摊牌亮过(showdown=1)才给。
+     * handNo<=0 = 最近一手;带 min/max 支持前后翻手。
+     */
+    public void handReview(long roomId, long userId, long handNo, Long sequence) {
+        DzRoom room = roomManager.get(roomId);
+        if (room == null) {
+            sendError(userId, roomId, "房间不存在");
+            return;
+        }
+        Map<String, Object> data = records.handReview(roomId, handNo, userId);
+        GameMessage res = GameMessage.create(MsgType.HAND_REVIEW_RES, roomId, data);
+        res.setSequence(sequence);
+        broadcaster.toUser(userId, res);
+    }
+
     /** 只剩一家(其他全弃) — 不摊牌直接拿走 */
     private void winByFold(DzRoom room, DzPlayer winner) {
         cancelActionTimeout(room);
@@ -1294,6 +1427,10 @@ public class DzGameService {
                 "handNo", room.getHandNo(), "reason", "fold",
                 "winnerUserId", winner != null ? winner.getUserId() : 0,
                 "pot", total, "results", results)));
+        // 看下一张窗口(对齐老德州148):弃牌提前结束且公共牌未满 → 开窗到下一手开始前
+        if (room.getBoard().size() < 5) {
+            room.setRabbitDeadline(System.currentTimeMillis() + nextHandDelay() * 1000L);
+        }
         finishHand(room);
     }
 
