@@ -65,6 +65,18 @@ public class DzRecordStore {
         }
     }
 
+    /** 未关闭的房间(重启恢复用):roomId/creator/rules_json */
+    public java.util.List<java.util.Map<String, Object>> openRooms() {
+        if (jdbc == null) return java.util.List.of();
+        try {
+            return jdbc.queryForList(
+                    "SELECT room_id, creator_user_id, rules_json FROM dz_room WHERE closed_at IS NULL ORDER BY id");
+        } catch (Exception e) {
+            log.error("dz_room 未关闭房间查询失败", e);
+            return java.util.List.of();
+        }
+    }
+
     /** 一手结束:每个参与者一行明细(在 finishHand 时调用,netWin 已算好) */
     public void saveHandRecords(DzRoom room) {
         if (jdbc == null) return;

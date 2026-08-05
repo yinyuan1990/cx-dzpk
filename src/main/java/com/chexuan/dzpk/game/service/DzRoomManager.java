@@ -24,7 +24,16 @@ public class DzRoomManager {
         do {
             roomId = ThreadLocalRandom.current().nextLong(100000, 1000000);
         } while (rooms.containsKey(roomId));
+        return build(roomId, rules, creatorUserId);
+    }
 
+    /** 重启恢复(保留原房号;已存在则跳过) */
+    public DzRoom restore(long roomId, RoomRules rules, long creatorUserId) {
+        DzRoom exist = rooms.get(roomId);
+        return exist != null ? exist : build(roomId, rules, creatorUserId);
+    }
+
+    private DzRoom build(long roomId, RoomRules rules, long creatorUserId) {
         DzRoom room = new DzRoom(rules.getMaxPlayers());
         room.setRoomId(roomId);
         room.setCreatorUserId(creatorUserId);
