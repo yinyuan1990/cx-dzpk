@@ -38,6 +38,8 @@ public class DzAdminController {
     private final org.springframework.jdbc.core.JdbcTemplate jdbc;
     private final com.chexuan.dzpk.robot.RobotService robotService;
     private final com.chexuan.dzpk.robot.DzRobotAdminService robotAdmin;
+    private final com.chexuan.dzpk.robot.RobotParamService robotParams;
+    private final com.chexuan.dzpk.robot.DzProfitControl profitControl;
 
     /** token → 过期时间戳 */
     private final Map<String, Long> tokens = new ConcurrentHashMap<>();
@@ -51,7 +53,9 @@ public class DzAdminController {
                              com.chexuan.dzpk.db.DiamondService diamondService,
                              org.springframework.jdbc.core.JdbcTemplate jdbc,
                              com.chexuan.dzpk.robot.RobotService robotService,
-                             com.chexuan.dzpk.robot.DzRobotAdminService robotAdmin) {
+                             com.chexuan.dzpk.robot.DzRobotAdminService robotAdmin,
+                             com.chexuan.dzpk.robot.RobotParamService robotParams,
+                             com.chexuan.dzpk.robot.DzProfitControl profitControl) {
         this.configService = configService;
         this.roomManager = roomManager;
         this.gameService = gameService;
@@ -61,6 +65,8 @@ public class DzAdminController {
         this.jdbc = jdbc;
         this.robotService = robotService;
         this.robotAdmin = robotAdmin;
+        this.robotParams = robotParams;
+        this.profitControl = profitControl;
     }
 
     // ==================== 登录 ====================
@@ -291,6 +297,54 @@ public class DzAdminController {
                                             @PathVariable long clubId) {
         if (!authed(token)) return deny();
         return robotAdmin.rename(clubId);
+    }
+
+    // ==================== 机器人参数(俱乐部默认 + 房间覆盖)/ 控盘 ====================
+
+    /** 俱乐部机器人参数(含控盘,默认值兜底) */
+    @GetMapping("/clubs/{clubId}/robot-config")
+    public Map<String, Object> robotConfig(@RequestHeader(value = "X-Admin-Token", required = false) String token,
+                                           @PathVariable long clubId) {
+        if (!authed(token)) return deny();
+        return Map.of("code", 0, "config", robotParams.clubConfig(clubId));
+    }
+
+    /** 保存俱乐部机器人参数 */
+    @PutMapping("/clubs/{clubId}/robot-config")
+    public Map<String, Object> saveRobotConfig(@RequestHeader(value = "X-Admin-Token", required = false) String token,
+                                               @PathVariable long clubId, @RequestBody Map<String, Object> body) {
+        if (!authed(token)) return deny();
+        try {
+            robotParams.saveClub(clubId, body);
+            return Map.of("code", 0);
+        } catch (Exception e) {
+            log.error("机器人参数保存失败: clubId={}", clubId, e);
+            return Map.of("code", 1, "msg", "保存失败: " + e.getMessage());
+        }
+    }
+
+    /** 房间实际生效参数(值+来源) + 控盘状态 */
+    @GetMapping("/rooms/{roomId}/robot-params")
+    public Map<String, Object> roomRobotParams(@RequestHeader(value = "X-Admin-Token", required = false) String token,
+                                               @PathVariable long roomId) {
+        if (!authed(token)) return deny();
+        DzRoom room = roomManager.get(roomId);
+        if (room == null) return Map.of("code", 1, "msg", "房间不存在");
+        return Map.of("code", 0, "params", robotParams.effective(room), "profit", profitControl.status(room));
+    }
+
+    /** 设置房间参数覆盖(空值=清除该键覆盖);resetLedger=true 顺带清控盘账本 */
+    @PutMapping("/rooms/{roomId}/robot-params")
+    public Map<String, Object> setRoomRobotParams(@RequestHeader(value = "X-Admin-Token", required = false) String token,
+                                                  @PathVariable long roomId, @RequestBody Map<String, Object> body) {
+        if (!authed(token)) return deny();
+        DzRoom room = roomManager.get(roomId);
+        if (room == null) return Map.of("code", 1, "msg", "房间不存在");
+        robotParams.setRoomOverrides(roomId, body);
+        if (Boolean.TRUE.equals(body.get("resetLedger")) || "true".equals(String.valueOf(body.get("resetLedger")))) {
+            profitControl.resetLedger(roomId);
+        }
+        return Map.of("code", 0, "params", robotParams.effective(room));
     }
 
     /** 一键补分:{amount} → 该俱乐部全部机器人各加 amount 积分 */

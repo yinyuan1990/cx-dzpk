@@ -54,6 +54,10 @@ export const api = {
   topUpRobots: (clubId, amount) => req('POST', `/clubs/${clubId}/robots/topup`, { amount }),
   renameRobots: (clubId) => req('POST', `/clubs/${clubId}/robots/rename`, {}),
   assignRobotAvatars: (clubId, urls) => req('POST', `/clubs/${clubId}/robots/avatars`, { urls }),
+  robotConfig: (clubId) => req('GET', `/clubs/${clubId}/robot-config`),
+  saveRobotConfig: (clubId, config) => req('PUT', `/clubs/${clubId}/robot-config`, config),
+  roomRobotParams: (roomId) => req('GET', `/rooms/${roomId}/robot-params`),
+  setRoomRobotParams: (roomId, body) => req('PUT', `/rooms/${roomId}/robot-params`, body),
   spawnRobots: (roomId, count) => req('POST', '/robots/spawn', { roomId, count }),
   clearRobots: (roomId) => req('POST', '/robots/clear', { roomId }),
 }

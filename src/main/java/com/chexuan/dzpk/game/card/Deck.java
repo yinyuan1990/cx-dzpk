@@ -32,4 +32,16 @@ public class Deck {
     public int remaining() {
         return cards.size() - cursor;
     }
+
+    /**
+     * 窥视接下来 n 张(不动游标)。机器人"上帝视角"专用——对齐老德州 AiBipai:
+     * AT 用完整 5 张公共牌(含未发出的)与对手比牌判断本手最终输赢,再按性格表行动。
+     */
+    public List<Card> peek(int n) {
+        List<Card> out = new ArrayList<>(Math.max(0, n));
+        for (int i = cursor; i < Math.min(cursor + n, cards.size()); i++) {
+            out.add(cards.get(i));
+        }
+        return out;
+    }
 }

@@ -115,6 +115,84 @@ async function renameAll() {
   }
 }
 
+// ===== 机器人参数(俱乐部级,含控盘;对齐扯旋 RobotClubConfig 两层结构) =====
+const PARAM_DEFS = [
+  { key: 'min_action_delay_ms', label: '行动延迟下限(毫秒)' },
+  { key: 'max_action_delay_ms', label: '行动延迟上限(毫秒)' },
+  { key: 'aggressive_prob', label: '松凶性格占比(%)' },
+  { key: 'conservative_prob', label: '紧弱性格占比(%,其余为平衡型)' },
+  { key: 'period_win_standup_prob', label: '周期净赢站起概率(%)' },
+  { key: 'period_lose_standup_prob', label: '周期净输站起概率(%)' },
+  { key: 'chip_cap_multiplier', label: '筹码封顶站起(大盲×N,0=关)' },
+  { key: 'loss_cap_multiplier', label: '亏损封顶站起(大盲×N,0=关)' },
+]
+const PROFIT_DEFS = [
+  { key: 'profit_enabled', label: '控盘开关', type: 'switch' },
+  { key: 'profit_mode', label: '控盘模式', type: 'mode' },
+  { key: 'profit_target', label: '绝对目标(分,负=放水给真人)' },
+  { key: 'profit_target_rate', label: '比率目标(%,负=放水;rate模式生效)' },
+  { key: 'profit_per_hand_cap', label: '单手推动上限(分,0=大盲×200)' },
+  { key: 'profit_adjust_strength', label: '纠偏强度(%)' },
+]
+const showRobotCfg = ref(false)
+const robotCfg = ref({})
+async function openRobotCfg() {
+  const res = await api.robotConfig(current.value.clubId)
+  if (res.code === 0) {
+    robotCfg.value = { ...res.config }
+    showRobotCfg.value = true
+  } else {
+    toast(res.msg || '读取参数失败')
+  }
+}
+async function saveRobotCfg() {
+  if (busy.value) return
+  busy.value = true
+  try {
+    const res = await api.saveRobotConfig(current.value.clubId, robotCfg.value)
+    if (res.code === 0) { toast('机器人参数已保存(对该俱乐部所有桌生效)'); showRobotCfg.value = false }
+    else toast(res.msg || '保存失败')
+  } finally {
+    busy.value = false
+  }
+}
+
+// ===== 房间参数覆盖 + 控盘状态 =====
+const roomParams = ref(null) // { roomId, params: {key:{value,source,override}}, profit: {...} }
+const roomOverrideInput = ref({})
+async function openRoomParams(r) {
+  const res = await api.roomRobotParams(r.roomId)
+  if (res.code === 0) {
+    roomParams.value = { roomId: r.roomId, name: r.name || '房间' + r.roomId, params: res.params, profit: res.profit }
+    const inputs = {}
+    for (const k of Object.keys(res.params)) {
+      const o = res.params[k] && res.params[k].override
+      inputs[k] = o == null ? '' : o
+    }
+    roomOverrideInput.value = inputs
+  } else {
+    toast(res.msg || '读取房间参数失败')
+  }
+}
+async function saveRoomParams(resetLedger = false) {
+  if (busy.value || !roomParams.value) return
+  busy.value = true
+  try {
+    const body = { ...roomOverrideInput.value }
+    if (resetLedger) body.resetLedger = true
+    const res = await api.setRoomRobotParams(roomParams.value.roomId, body)
+    if (res.code === 0) {
+      toast(resetLedger ? '已保存并重置控盘账本' : '房间覆盖已保存(空=跟俱乐部走)')
+      await openRoomParams({ roomId: roomParams.value.roomId, name: roomParams.value.name })
+    } else {
+      toast(res.msg || '保存失败')
+    }
+  } finally {
+    busy.value = false
+  }
+}
+const ALL_DEFS = [...PARAM_DEFS, ...PROFIT_DEFS.filter((d) => d.key !== 'profit_mode')]
+
 // ===== 批量换头像:本地多选图 → 压缩 → MinIO 直传 → 一人一图分配 =====
 function compressImage(file, maxSize = 256) {
   return new Promise((resolve, reject) => {
@@ -299,6 +377,7 @@ onUnmounted(() => clearInterval(timer))
           <button class="btn" :disabled="busy || !memberStats.robotCount" @click="renameAll">一键改名</button>
           <button class="btn" :disabled="busy || !memberStats.robotCount"
             @click="avatarInput && avatarInput.click()">批量换头像</button>
+          <button class="btn cfg" :disabled="busy" @click="openRobotCfg">机器人参数/控盘</button>
           <input ref="avatarInput" type="file" accept="image/*" multiple style="display: none" @change="onPickAvatars" />
         </div>
 
@@ -360,10 +439,76 @@ onUnmounted(() => clearInterval(timer))
           <button class="btn primary" :disabled="busy" @click="spawn(r.roomId, cntFor(r.roomId))">派机器人上桌</button>
           <button class="btn danger" :disabled="busy || !robotByRoom[String(r.roomId)]"
             @click="clearBots(r.roomId)">撤回机器人</button>
+          <button class="btn cfg" @click="openRoomParams(r)">参数覆盖/控盘</button>
           <button class="btn dark" @click="dismiss(r)">强制解散</button>
         </div>
       </div>
     </template>
+
+    <!-- 俱乐部机器人参数弹窗(对该俱乐部所有桌生效) -->
+    <div v-if="showRobotCfg" class="modal-mask" @click.self="showRobotCfg = false">
+      <div class="modal">
+        <div class="m-title">机器人参数(俱乐部级,房间可单独覆盖)</div>
+        <div class="m-grid">
+          <label v-for="d in PARAM_DEFS" :key="d.key" class="m-row">
+            <span>{{ d.label }}</span>
+            <input v-model.number="robotCfg[d.key]" type="number" />
+          </label>
+        </div>
+        <div class="m-sub">盈利控盘(机器人对真人净收益收敛到目标;负目标=放水。发牌不动,靠机器人"知牌"决策:吃分手赢家做池、放水手赢家让牌)</div>
+        <div class="m-grid">
+          <label class="m-row">
+            <span>控盘开关</span>
+            <select v-model.number="robotCfg.profit_enabled">
+              <option :value="0">关闭</option>
+              <option :value="1">开启</option>
+            </select>
+          </label>
+          <label class="m-row">
+            <span>控盘模式</span>
+            <select v-model="robotCfg.profit_mode">
+              <option value="absolute">绝对值(分)</option>
+              <option value="rate">比率(真人流水%)</option>
+            </select>
+          </label>
+          <label v-for="d in PROFIT_DEFS.filter((x) => !x.type)" :key="d.key" class="m-row">
+            <span>{{ d.label }}</span>
+            <input v-model.number="robotCfg[d.key]" type="number" />
+          </label>
+        </div>
+        <div class="m-btns">
+          <button class="btn" @click="showRobotCfg = false">取消</button>
+          <button class="btn primary" :disabled="busy" @click="saveRobotCfg">保存</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 房间参数覆盖 + 控盘状态弹窗 -->
+    <div v-if="roomParams" class="modal-mask" @click.self="roomParams = null">
+      <div class="modal">
+        <div class="m-title">{{ roomParams.name }} · 参数覆盖(留空=跟俱乐部默认走)</div>
+        <div v-if="roomParams.profit" class="pf-status">
+          控盘:{{ roomParams.profit.enabled ? (roomParams.profit.mode === 'rate' ? '比率模式' : '绝对模式') : '未开启' }}
+          · 目标 {{ roomParams.profit.target }} · 账本 {{ roomParams.profit.ledgerNet }}
+          · 真人流水 {{ roomParams.profit.volume }} · 已记 {{ roomParams.profit.handCount }} 手
+          · 本手方向 {{ roomParams.profit.bias === 1 ? '吃分' : roomParams.profit.bias === -1 ? '放水' : '中性' }}
+        </div>
+        <div class="m-grid">
+          <label v-for="d in ALL_DEFS" :key="d.key" class="m-row">
+            <span>{{ d.label }}
+              <i class="src">当前 {{ roomParams.params[d.key] ? roomParams.params[d.key].value : '-' }}
+                ({{ roomParams.params[d.key] ? roomParams.params[d.key].source : '-' }})</i>
+            </span>
+            <input v-model="roomOverrideInput[d.key]" type="number" placeholder="留空=俱乐部默认" />
+          </label>
+        </div>
+        <div class="m-btns">
+          <button class="btn" @click="roomParams = null">关闭</button>
+          <button class="btn danger" :disabled="busy" @click="saveRoomParams(true)">保存并重置账本</button>
+          <button class="btn primary" :disabled="busy" @click="saveRoomParams(false)">保存覆盖</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -439,6 +584,29 @@ td { padding: 4px 8px; border-top: 1px solid #1c2833; }
 .mav { width: 26px; height: 26px; border-radius: 50%; object-fit: cover; display: block; }
 .is-bot { color: #6cb8f0; }
 .is-human { color: #cbd6e0; }
+.btn.cfg { background: #2b3d55; color: #a8c8f0; }
+.modal-mask {
+  position: fixed; inset: 0; background: rgba(0, 0, 0, 0.55); z-index: 50;
+  display: flex; align-items: center; justify-content: center;
+}
+.modal {
+  width: 620px; max-width: 94vw; max-height: 86vh; overflow-y: auto;
+  background: #131d27; border: 1px solid #2a3947; border-radius: 12px; padding: 18px 20px;
+}
+.m-title { font-size: 15px; font-weight: 700; color: #dbe5ee; margin-bottom: 14px; }
+.m-sub { color: #7d8fa0; font-size: 12px; margin: 14px 0 10px; line-height: 1.6; }
+.m-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px; }
+.m-row { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #9fb0c0; }
+.m-row input, .m-row select {
+  background: #0f1821; border: 1px solid #2a3947; color: #dbe5ee;
+  border-radius: 6px; padding: 6px 8px; font-size: 13px;
+}
+.m-row .src { display: block; font-style: normal; color: #566a7d; font-size: 11px; }
+.m-btns { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
+.pf-status {
+  background: #16202b; border: 1px solid #2a3947; border-radius: 8px;
+  padding: 8px 12px; font-size: 12px; color: #a8c8f0; margin-bottom: 12px; line-height: 1.7;
+}
 .pager { display: flex; align-items: center; justify-content: center; gap: 14px; margin-top: 12px; }
 .pg-btn {
   background: #1c2833; color: #9fb0c0; padding: 5px 14px;

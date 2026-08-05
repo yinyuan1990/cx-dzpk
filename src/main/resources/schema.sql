@@ -261,3 +261,24 @@ CREATE UNIQUE INDEX idx_dz_user_phone ON dz_user (phone);
 CREATE INDEX idx_dz_user_number ON dz_user (number_id);
 -- 机器人标记(旧库补列)
 ALTER TABLE dz_user ADD COLUMN is_robot TINYINT NOT NULL DEFAULT 0;
+
+-- 机器人俱乐部参数(对齐扯旋 RobotClubConfig 精简德州版,每俱乐部一条;
+--   房间级覆盖在内存,管理台热改;含决策延时/性格分布/站起策略/控盘)
+CREATE TABLE IF NOT EXISTS dz_robot_club_config (
+    club_id                  BIGINT PRIMARY KEY,
+    min_action_delay_ms      INT         NOT NULL DEFAULT 800,
+    max_action_delay_ms      INT         NOT NULL DEFAULT 2500,
+    aggressive_prob          INT         NOT NULL DEFAULT 30,
+    conservative_prob        INT         NOT NULL DEFAULT 30,
+    period_win_standup_prob  INT         NOT NULL DEFAULT 40,
+    period_lose_standup_prob INT         NOT NULL DEFAULT 30,
+    chip_cap_multiplier      INT         NOT NULL DEFAULT 0,
+    loss_cap_multiplier      INT         NOT NULL DEFAULT 0,
+    profit_enabled           TINYINT     NOT NULL DEFAULT 0,
+    profit_mode              VARCHAR(10) NOT NULL DEFAULT 'absolute',
+    profit_target            BIGINT      NOT NULL DEFAULT 0,
+    profit_target_rate       INT         NOT NULL DEFAULT 0,
+    profit_per_hand_cap      BIGINT      NOT NULL DEFAULT 0,
+    profit_adjust_strength   INT         NOT NULL DEFAULT 50,
+    updated_at               DATETIME    NOT NULL
+);

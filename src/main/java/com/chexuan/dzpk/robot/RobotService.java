@@ -84,6 +84,14 @@ public class RobotService {
     @org.springframework.beans.factory.annotation.Autowired(required = false)
     private RobotRegistry registry;
 
+    /** 机器人参数中心(俱乐部默认+房间覆盖;单测可为 null 退回 @Value) */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private RobotParamService params;
+
+    /** 盈利控盘(单测可为 null=不控) */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private DzProfitControl profit;
+
     @org.springframework.beans.factory.annotation.Autowired
     public RobotService(DzRoomManager roomManager, @Lazy DzGameService gameService,
                         com.chexuan.dzpk.config.DzConfigService cfg) {
@@ -144,16 +152,29 @@ public class RobotService {
         switch (msg.getType()) {
             case MsgType.PLAYER_SIT, MsgType.BUY_IN_RES, MsgType.PLAYER_ENTER, MsgType.ROOM_STATE ->
                     schedule(() -> fillCheck(roomId), 600);
+            // 开手:控盘定方向(广播在 roomWorker 线程同步到达,此刻手牌已发、状态一致)
+            case MsgType.HAND_START -> {
+                DzRoom rm = roomManager.get(roomId);
+                if (rm != null && profit != null) profit.planHand(rm, this::isRobot);
+            }
+            // 一手结算:控盘记账 + 筹码/亏损封顶站起检查
+            case MsgType.SETTLE -> {
+                DzRoom rm = roomManager.get(roomId);
+                if (rm != null && profit != null) profit.onSettle(rm, this::isRobot);
+                schedule(() -> capStandUpCheck(roomId), 1500);
+            }
             case MsgType.TURN -> {
                 long uid = lng(data, "userId");
                 if (isRobot(uid) && isMyRobot(roomId, uid)) {
-                    schedule(() -> act(roomId, uid, data), randDelay());
+                    schedule(() -> act(roomId, uid, data), randDelay(roomId));
                 }
             }
             case MsgType.PERIOD_SETTLE -> {
                 long uid = lng(data, "userId");
                 if (isRobot(uid) && isMyRobot(roomId, uid)) {
-                    schedule(() -> rebuy(roomId, uid), 1000 + ThreadLocalRandom.current().nextLong(1500));
+                    long periodProfit = lng(data, "profit");
+                    schedule(() -> periodDecision(roomId, uid, periodProfit),
+                            1000 + ThreadLocalRandom.current().nextLong(1500));
                 }
             }
             case MsgType.PLAYER_STAND, MsgType.PLAYER_LEAVE ->
@@ -259,6 +280,8 @@ public class RobotService {
                 roomRobots.remove(roomId);
             }
             reservedSeats.remove(roomId);
+            if (profit != null) profit.clearRoom(roomId);
+            if (params != null) params.clearRoom(roomId);
             return;
         }
         boolean humanInRoom = room.getMembers().keySet().stream().anyMatch(uid -> !isRobot(uid));
@@ -289,6 +312,57 @@ public class RobotService {
         gameService.buyIn(roomId, robotId, buyin);
     }
 
+    /**
+     * 周期结算决策(对齐扯旋 periodWin/LoseStandUpProb):
+     * 净赢/净输按各自概率站起离桌,否则补带入继续打。
+     */
+    private void periodDecision(long roomId, long robotId, long periodProfit) {
+        DzRoom room = roomManager.get(roomId);
+        if (room == null) return;
+        long prob = params == null ? 0
+                : params.getLong(room, periodProfit >= 0 ? "period_win_standup_prob" : "period_lose_standup_prob");
+        if (ThreadLocalRandom.current().nextInt(100) < prob) {
+            log.info("机器人周期站起: roomId={}, robotId={}, profit={}, prob={}", roomId, robotId, periodProfit, prob);
+            removeRobotFromTable(roomId, robotId);
+        } else {
+            rebuy(roomId, robotId);
+        }
+    }
+
+    /**
+     * 筹码/亏损封顶站起(对齐扯旋 chipCap/lossCapMultiplier,大盲×倍数;0=不启用):
+     * 一手结算后检查,命中的机器人站起离桌。
+     */
+    private void capStandUpCheck(long roomId) {
+        DzRoom room = roomManager.get(roomId);
+        Set<Long> robots = roomRobots.get(roomId);
+        if (room == null || robots == null || robots.isEmpty() || params == null) return;
+        long chipCap = params.getLong(room, "chip_cap_multiplier");
+        long lossCap = params.getLong(room, "loss_cap_multiplier");
+        if (chipCap <= 0 && lossCap <= 0) return;
+        for (long robotId : List.copyOf(robots)) {
+            DzPlayer p = room.playerByUserId(robotId);
+            if (p == null) continue;
+            long net = p.getStack() - p.getBringInThisPeriod();
+            if (chipCap > 0 && p.getStack() >= room.getBb() * chipCap) {
+                log.info("机器人筹码封顶站起: roomId={}, robotId={}, stack={}", roomId, robotId, p.getStack());
+                removeRobotFromTable(roomId, robotId);
+            } else if (lossCap > 0 && -net >= room.getBb() * lossCap) {
+                log.info("机器人亏损封顶站起: roomId={}, robotId={}, net={}", roomId, robotId, net);
+                removeRobotFromTable(roomId, robotId);
+            }
+        }
+    }
+
+    /** 机器人站起并离桌(牌局中先 pending 局末落地),从驱动表移除 */
+    private void removeRobotFromTable(long roomId, long robotId) {
+        gameService.standUp(roomId, robotId);
+        gameService.leaveRoom(roomId, robotId);
+        Set<Long> robots = roomRobots.get(roomId);
+        if (robots != null) robots.remove(robotId);
+        holeCards.remove(robotId);
+    }
+
     private long randomBuyin(DzRoom room) {
         long lo = room.getMinBuyin();
         long hi = Math.min(room.getMaxBuyin(), lo * 3);
@@ -296,7 +370,7 @@ public class RobotService {
     }
 
     // ================================================================
-    // 行动策略(启发式,不追求强度,只求打起来像样)
+    // 行动策略 — 复用老德州模型(RobotBrain:上帝视角比牌 + 性格概率表 + 控盘介入)
     // ================================================================
 
     private void act(long roomId, long robotId, Map<String, Object> turnData) {
@@ -307,101 +381,27 @@ public class RobotService {
 
         long toCall = lng(turnData, "toCall");
         long minRaiseTo = lng(turnData, "minRaiseTo");
-        long stack = me.getStack();
-        long bb = room.getBb();
 
-        double s = strength(robotId, room);
-        s += ThreadLocalRandom.current().nextDouble(-0.08, 0.08);
+        int persona = RobotBrain.personaOf(robotId,
+                params != null ? params.getInt(room, "aggressive_prob") : 30,
+                params != null ? params.getInt(room, "conservative_prob") : 30);
+        int bias = profit != null ? profit.biasFor(roomId) : 0;
+        long budget = profit != null ? profit.budgetLeft(roomId) : 0;
 
-        String act;
-        long amount = 0;
-        if (toCall <= 0) {
-            if (s > 0.72 && stack > 0 && minRaiseTo > 0) {
-                act = "raise";
-                amount = Math.min(minRaiseTo + (long) (bb * ThreadLocalRandom.current().nextInt(0, 3)),
-                        me.getBetThisRound() + stack);
-            } else if (s > 0.55 && ThreadLocalRandom.current().nextDouble() < 0.25) {
-                act = "raise";
-                amount = Math.min(minRaiseTo, me.getBetThisRound() + stack);
-            } else {
-                act = "check";
-            }
-        } else if (toCall >= stack) {
-            // 跟注就等于全下
-            act = s > 0.72 ? "call" : "fold";
-        } else {
-            boolean cheap = toCall <= bb * 2;
-            if (s > 0.82) {
-                if (ThreadLocalRandom.current().nextDouble() < 0.6 && minRaiseTo - me.getBetThisRound() < stack) {
-                    act = "raise";
-                    amount = minRaiseTo;
-                } else {
-                    act = "call";
-                }
-            } else if (s > 0.58) {
-                act = "call";
-            } else if (s > 0.42 && cheap) {
-                act = "call";
-            } else if (cheap && ThreadLocalRandom.current().nextDouble() < 0.12) {
-                act = "call";  // 偶尔松一手
-            } else {
-                act = "fold";
-            }
+        RobotBrain.Decision d = RobotBrain.decide(room, me, toCall, minRaiseTo, persona, bias, budget);
+
+        // 放水手喂池消耗预算(新增投入:call≈toCall;raise≈raiseTo-本轮已投)
+        if (profit != null && bias == -1) {
+            long spend = switch (d.act()) {
+                case "call" -> toCall;
+                case "raise" -> Math.max(0, d.amount() - me.getBetThisRound());
+                default -> 0;
+            };
+            if (spend > 0) profit.consume(roomId, spend);
         }
-        log.debug("机器人行动: roomId={}, robotId={}, s={}, act={}, amount={}", roomId, robotId,
-                String.format("%.2f", s), act, amount);
-        gameService.action(roomId, robotId, act, amount);
-    }
-
-    /**
-     * 粗略牌力 0~1:翻牌前看起手牌,翻牌后看与公共牌的成牌程度
-     */
-    private double strength(long robotId, DzRoom room) {
-        List<Card> hole = holeCards.get(robotId);
-        if (hole == null || hole.size() != 2) return 0.4;
-        int r1 = hole.get(0).getRank();
-        int r2 = hole.get(1).getRank();
-        boolean pocketPair = r1 == r2;
-        boolean suited = hole.get(0).getSuit() == hole.get(1).getSuit();
-        int hi = Math.max(r1, r2);
-        int lo = Math.min(r1, r2);
-
-        // 起手牌基础分
-        double base;
-        if (pocketPair) {
-            base = 0.55 + (r1 - 2) * 0.02;          // 22=0.55 ... AA=0.79
-        } else if (hi == 14) {
-            base = 0.45 + (lo - 2) * 0.015;          // A2=0.45 ... AK=0.61
-        } else if (hi >= 12 && lo >= 10) {
-            base = 0.52;                             // KQ/KJ/QJ/KT/QT 档
-        } else {
-            base = 0.28 + hi * 0.01 + (suited ? 0.04 : 0) + (hi - lo <= 2 ? 0.03 : 0);
-        }
-
-        List<Card> board = room.getBoard();
-        if (board.isEmpty()) return base;
-
-        // 翻牌后:数成牌
-        int match1 = 0, match2 = 0;
-        for (Card b : board) {
-            if (b.getRank() == r1) match1++;
-            if (b.getRank() == r2) match2++;
-        }
-        if (pocketPair && match1 >= 1) return 0.95;                 // 暗三条+
-        if (match1 >= 2 || match2 >= 2) return 0.9;                 // 明三条
-        if (match1 >= 1 && match2 >= 1) return 0.85;                // 两对
-        if (pocketPair) {
-            // 超对/中对:口袋对 vs 公共牌最大张
-            int boardMax = board.stream().mapToInt(Card::getRank).max().orElse(0);
-            return r1 > boardMax ? 0.8 : 0.55;
-        }
-        if (match1 >= 1 || match2 >= 1) {
-            int pairRank = match1 >= 1 ? r1 : r2;
-            int boardMax = board.stream().mapToInt(Card::getRank).max().orElse(0);
-            return pairRank >= boardMax ? 0.68 : 0.52;              // 顶对/中对
-        }
-        // 没成牌:高牌打折
-        return Math.max(0.15, base - 0.18);
+        log.debug("机器人行动: roomId={}, robotId={}, persona={}, bias={}, act={}, amount={}",
+                roomId, robotId, persona, bias, d.act(), d.amount());
+        gameService.action(roomId, robotId, d.act(), d.amount());
     }
 
     // ================================================================
@@ -411,8 +411,19 @@ public class RobotService {
         return robots != null && robots.contains(userId);
     }
 
-    private long randDelay() {
-        return robotMinDelay() + ThreadLocalRandom.current().nextLong(Math.max(1, robotMaxDelay() - robotMinDelay()));
+    /** 行动延迟:优先房间/俱乐部参数(RobotParamService 两层),无参数中心退回 @Value */
+    private long randDelay(long roomId) {
+        long lo = robotMinDelay();
+        long hi = robotMaxDelay();
+        if (params != null) {
+            DzRoom room = roomManager.get(roomId);
+            if (room != null) {
+                lo = params.getLong(room, "min_action_delay_ms");
+                hi = params.getLong(room, "max_action_delay_ms");
+            }
+        }
+        if (hi < lo) hi = lo;
+        return lo + ThreadLocalRandom.current().nextLong(Math.max(1, hi - lo));
     }
 
     private void schedule(Runnable task, long delayMs) {
