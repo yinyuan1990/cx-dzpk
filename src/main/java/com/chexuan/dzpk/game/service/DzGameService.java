@@ -663,7 +663,8 @@ public class DzGameService {
                     "handNo", room.getHandNo(), "pot", room.displayPot(),
                     "totalBringIn", totalBringIn + historyBringIn, "totalStack", totalStack,
                     "settleTimeMins", room.getSettleTimeMins(),
-                    "createdAtMs", room.getCreatedAtMs()));
+                    // 对局时长起点=本段第一手开局(0=没开过局,前端隐藏计时;对齐扯旋 lastGameTime)
+                    "gameStartMs", room.getFirstHandStartMs()));
             data.put("history", records.roomRecords(roomId, 50));
             GameMessage res = GameMessage.create(MsgType.REALTIME_STATS_RES, roomId, data);
             res.setSequence(sequence);
@@ -803,6 +804,10 @@ public class DzGameService {
         }
 
         room.setHandNo(room.getHandNo() + 1);
+        // 本段第一手:记开局时刻(实时战绩"对局时长"起点,对齐扯旋 lastGameTime)
+        if (room.getFirstHandStartMs() == 0) {
+            room.setFirstHandStartMs(System.currentTimeMillis());
+        }
         room.getBoard().clear();
         room.setPots(new ArrayList<>());
         room.setCollectedPot(0);
@@ -1620,6 +1625,8 @@ public class DzGameService {
             for (DzPlayer q : room.getSeats()) {
                 if (q != null) return;
             }
+            // 空桌:本段结束,对局时长归零(对齐扯旋清池回等待 gameStartTime=0,前端隐藏计时)
+            room.setFirstHandStartMs(0);
             boolean hasOtherSameBlind = false;
             for (DzRoom r : roomManager.list()) {
                 if (r.getRoomId() != roomId && r.getClubId() == room.getClubId() && r.getSb() == room.getSb()) {

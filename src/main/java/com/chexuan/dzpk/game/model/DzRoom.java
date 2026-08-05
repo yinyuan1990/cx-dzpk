@@ -63,8 +63,14 @@ public class DzRoom {
     /** 房间内所有人(含站起的观众) userId → 昵称 */
     private final Map<Long, String> members = new ConcurrentHashMap<>();
 
-    /** 房间创建时刻(实时战绩"对局时长"起点;重启恢复的房间=恢复时刻) */
+    /** 房间创建时刻(重启恢复的房间=恢复时刻) */
     private final long createdAtMs = System.currentTimeMillis();
+
+    /**
+     * 本段第一手开局时刻(对齐扯旋 lastGameTime):实时战绩"对局时长"起点。
+     * 0=还没开过局(前端隐藏计时);空桌(最后一人站起)归零,下次开局重新计。
+     */
+    private long firstHandStartMs;
 
     // ==================== 一手牌的牌局状态 ====================
 
