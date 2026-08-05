@@ -63,6 +63,9 @@ public class DzRoom {
     /** 房间内所有人(含站起的观众) userId → 昵称 */
     private final Map<Long, String> members = new ConcurrentHashMap<>();
 
+    /** 房间创建时刻(实时战绩"对局时长"起点;重启恢复的房间=恢复时刻) */
+    private final long createdAtMs = System.currentTimeMillis();
+
     // ==================== 一手牌的牌局状态 ====================
 
     private GameStage stage = GameStage.WAITING;

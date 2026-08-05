@@ -603,16 +603,29 @@ public class DzGameService {
             return;
         }
         roomWorker.submit(roomId, () -> {
+            // 6 位 ID 批量查(座位玩家 + 观众都要)
+            java.util.Set<Long> allIds = new java.util.HashSet<>(room.getMembers().keySet());
+            for (DzPlayer sp : room.getSeats()) {
+                if (sp != null) allIds.add(sp.getUserId());
+            }
+            Map<Long, Map<String, Object>> briefs = records.userBriefs(allIds);
+
             List<Map<String, Object>> players = new ArrayList<>();
+            java.util.Set<Long> seatedIds = new java.util.HashSet<>();
             long totalBringIn = 0, totalStack = 0;
             for (DzPlayer p : room.getSeats()) {
                 if (p == null) continue;
+                seatedIds.add(p.getUserId());
                 totalBringIn += p.getBringInThisPeriod();
                 totalStack += p.getStack();
+                Map<String, Object> brief = briefs.getOrDefault(p.getUserId(), Map.of());
                 Map<String, Object> m = new LinkedHashMap<>();
                 m.put("userId", p.getUserId());
                 m.put("nickname", p.getNickname());
                 m.put("seat", p.getSeat());
+                m.put("avatar", p.getAvatar() != null && !p.getAvatar().isEmpty()
+                        ? p.getAvatar() : brief.getOrDefault("avatar", ""));
+                m.put("numberId", brief.getOrDefault("numberId", ""));
                 m.put("bringIn", p.getBringInThisPeriod());
                 m.put("stack", p.getStack());
                 // 实时盈亏:未结手把桌面投入加回(对齐扯旋)
@@ -628,13 +641,26 @@ public class DzGameService {
                 }
                 players.add(m);
             }
+            // 围观人员 = 房间成员 - 在座(对齐扯旋 viewers)
+            List<Map<String, Object>> viewers = new ArrayList<>();
+            for (Map.Entry<Long, String> e : room.getMembers().entrySet()) {
+                if (seatedIds.contains(e.getKey())) continue;
+                Map<String, Object> brief = briefs.getOrDefault(e.getKey(), Map.of());
+                viewers.add(Map.of(
+                        "userId", e.getKey(),
+                        "nickname", e.getValue() == null || e.getValue().isEmpty()
+                                ? brief.getOrDefault("nickname", "玩家" + e.getKey()) : e.getValue(),
+                        "avatar", brief.getOrDefault("avatar", "")));
+            }
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("players", players);
+            data.put("viewers", viewers);
             data.put("room", Map.of(
                     "roomId", room.getRoomId(), "name", room.getName(),
                     "handNo", room.getHandNo(), "pot", room.displayPot(),
                     "totalBringIn", totalBringIn, "totalStack", totalStack,
-                    "settleTimeMins", room.getSettleTimeMins()));
+                    "settleTimeMins", room.getSettleTimeMins(),
+                    "createdAtMs", room.getCreatedAtMs()));
             data.put("history", records.roomRecords(roomId, 50));
             GameMessage res = GameMessage.create(MsgType.REALTIME_STATS_RES, roomId, data);
             res.setSequence(sequence);

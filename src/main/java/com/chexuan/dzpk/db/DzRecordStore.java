@@ -65,6 +65,29 @@ public class DzRecordStore {
         }
     }
 
+    /** 批量取用户简要资料(实时战绩:头像/6位ID;游客/大厅临时机器人查不到则缺省) */
+    public java.util.Map<Long, java.util.Map<String, Object>> userBriefs(java.util.Collection<Long> ids) {
+        java.util.Map<Long, java.util.Map<String, Object>> out = new java.util.HashMap<>();
+        if (jdbc == null || ids == null || ids.isEmpty()) return out;
+        try {
+            String in = ids.stream().map(String::valueOf).collect(java.util.stream.Collectors.joining(","));
+            for (java.util.Map<String, Object> row : jdbc.queryForList(
+                    "SELECT id, nickname, avatar, number_id FROM dz_user WHERE id IN (" + in + ")")) {
+                Object id = row.get("id") != null ? row.get("id") : row.get("ID");
+                Object nick = row.get("nickname") != null ? row.get("nickname") : row.get("NICKNAME");
+                Object av = row.get("avatar") != null ? row.get("avatar") : row.get("AVATAR");
+                Object no = row.get("number_id") != null ? row.get("number_id") : row.get("NUMBER_ID");
+                out.put(((Number) id).longValue(), java.util.Map.of(
+                        "nickname", nick == null ? "" : nick,
+                        "avatar", av == null ? "" : av,
+                        "numberId", no == null ? "" : no));
+            }
+        } catch (Exception e) {
+            log.error("用户简要资料查询失败", e);
+        }
+        return out;
+    }
+
     /** 未关闭的房间(重启恢复用):roomId/creator/rules_json */
     public java.util.List<java.util.Map<String, Object>> openRooms() {
         if (jdbc == null) return java.util.List.of();
