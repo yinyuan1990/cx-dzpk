@@ -299,7 +299,8 @@ public class DzWebSocketHandler extends TextWebSocketHandler {
             case MsgType.SEAT_RESERVE_RESUME -> gameService.seatReserveResume(roomId, userId);
             case MsgType.NEXT_CARD -> gameService.nextCard(roomId, userId);
             case MsgType.SHOW_CARDS -> gameService.showCards(roomId, userId, (int) lng(data, "mode", 3));
-            case MsgType.HAND_REVIEW -> gameService.handReview(roomId, userId, lng(data, "handNo", -1), msg.getSequence());
+            case MsgType.HAND_REVIEW -> gameService.handReview(roomId, userId, lng(data, "handNo", -1),
+                    lng(data, "forceShow", 0) == 1, msg.getSequence());
             case MsgType.REALTIME_STATS -> gameService.realtimeStats(roomId, userId, msg.getSequence());
             case MsgType.DISMISS_ROOM -> gameService.dismissRoom(roomId, userId);
             case MsgType.GIFT_LIST -> reply(session, msg, MsgType.GIFT_LIST_RES,

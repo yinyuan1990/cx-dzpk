@@ -1392,20 +1392,39 @@ public class DzGameService {
     }
 
     /**
-     * 牌型回顾(老德州90的简化版):每手一张静态快照(公共牌+各玩家手牌/牌型/盈亏),
-     * 不做动作流回放。可见性:自己的牌总是可见,他人的只有摊牌亮过(showdown=1)才给。
-     * handNo<=0 = 最近一手;带 min/max 支持前后翻手。
+     * 牌型回顾(对齐扯旋 CHEXUANTableRecordPanel):每手一张静态快照,每页一手,前后翻手。
+     * 可见性:自己的牌总是可见,他人的只有摊牌亮过才给;
+     * forceShow=true = 付费强制秀牌(对齐扯旋 forceShowCardCost):扣俱乐部积分后本手全部手牌解锁。
      */
-    public void handReview(long roomId, long userId, long handNo, Long sequence) {
+    public void handReview(long roomId, long userId, long handNo, boolean forceShow, Long sequence) {
         DzRoom room = roomManager.get(roomId);
         if (room == null) {
             sendError(userId, roomId, "房间不存在");
             return;
         }
-        Map<String, Object> data = records.handReview(roomId, handNo, userId);
+        long cost = 0;
+        if (forceShow) {
+            cost = cfgLong("force_show_card_cost", 200); // 默认 2 元(分)
+            if (cost > 0 && clubEconomy(room)
+                    && !com.chexuan.dzpk.robot.RobotService.isRobotId(userId)
+                    && (robotRegistry == null || !robotRegistry.isRobot(userId))) {
+                try {
+                    clubService.debitScoreForRabbit(room.getClubId(), userId, cost, roomId);
+                } catch (Exception e) {
+                    sendError(userId, roomId, "俱乐部积分不足");
+                    return;
+                }
+            }
+        }
+        Map<String, Object> data = records.handReview(roomId, handNo, userId, forceShow);
+        data.put("forceShown", forceShow);
+        data.put("forceShowCost", cfgLong("force_show_card_cost", 200));
         GameMessage res = GameMessage.create(MsgType.HAND_REVIEW_RES, roomId, data);
         res.setSequence(sequence);
         broadcaster.toUser(userId, res);
+        if (forceShow) {
+            log.info("强制秀牌: roomId={}, userId={}, handNo={}, cost={}", roomId, userId, handNo, cost);
+        }
     }
 
     /** 只剩一家(其他全弃) — 不摊牌直接拿走 */

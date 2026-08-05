@@ -166,16 +166,19 @@ public class DzRecordStore {
     }
 
     /**
-     * 牌型回顾(老德州90简化版):某一手的静态快照。
-     * handNo<=0 = 最近一手;可见性:请求者自己的手牌总是给,他人只有摊牌(showdown=1)才给。
-     * 返回 {handNo, minHandNo, maxHandNo, board, players:[{seat,nickname,userId,holeCards,handName,netWin,folded,showdown}]}
+     * 牌型回顾(对齐扯旋 CHEXUANTableRecordPanel):某一手的静态快照,每页一手。
+     * handNo<=0 = 最近一手;可见性:请求者自己的手牌总是给,他人只有摊牌(showdown=1)才给;
+     * forceShow=true(付费强制秀牌,费用在调用方扣)则全部给。
+     * 返回 {handNo, minHandNo, maxHandNo, board, roundTime,
+     *       players:[{seat,nickname,avatar,userId,holeCards,handName,netWin,totalBet,folded,showdown}]}
      */
-    public java.util.Map<String, Object> handReview(long roomId, long handNo, long viewerUserId) {
+    public java.util.Map<String, Object> handReview(long roomId, long handNo, long viewerUserId, boolean forceShow) {
         java.util.Map<String, Object> out = new java.util.LinkedHashMap<>();
         out.put("handNo", 0L);
         out.put("minHandNo", 0L);
         out.put("maxHandNo", 0L);
         out.put("board", "");
+        out.put("roundTime", 0L);
         out.put("players", java.util.List.of());
         if (jdbc == null) return out;
         try {
@@ -189,9 +192,17 @@ public class DzRecordStore {
             if (mx <= 0) return out;
             long target = handNo <= 0 ? mx : Math.max(mn, Math.min(mx, handNo));
             java.util.List<java.util.Map<String, Object>> rows = jdbc.queryForList(
-                    "SELECT user_id, nickname, seat, net_win, folded, showdown, hole_cards, board, hand_name " +
-                            "FROM dz_hand_record WHERE room_id = ? AND hand_no = ? ORDER BY seat", roomId, target);
+                    "SELECT user_id, nickname, seat, net_win, total_bet, folded, showdown, hole_cards, board, " +
+                            "hand_name, created_at FROM dz_hand_record WHERE room_id = ? AND hand_no = ? ORDER BY seat",
+                    roomId, target);
             out.put("handNo", target);
+            // 头像批量查(dz_user;游客/大厅临时机器人查不到则空)
+            java.util.Set<Long> ids = new java.util.HashSet<>();
+            for (java.util.Map<String, Object> r : rows) {
+                ids.add(((Number) col2(r, "user_id")).longValue());
+            }
+            java.util.Map<Long, java.util.Map<String, Object>> briefs = userBriefs(ids);
+
             java.util.List<java.util.Map<String, Object>> players = new ArrayList<>();
             for (java.util.Map<String, Object> r : rows) {
                 long uid = ((Number) col2(r, "user_id")).longValue();
@@ -200,17 +211,24 @@ public class DzRecordStore {
                 if (board != null && String.valueOf(out.get("board")).isEmpty()) {
                     out.put("board", String.valueOf(board));
                 }
+                Object ts = col2(r, "created_at");
+                if (ts instanceof Timestamp t && ((Number) out.get("roundTime")).longValue() == 0) {
+                    out.put("roundTime", t.getTime());
+                }
                 java.util.Map<String, Object> p = new java.util.LinkedHashMap<>();
                 p.put("userId", uid);
                 p.put("nickname", col2(r, "nickname"));
+                p.put("avatar", briefs.getOrDefault(uid, java.util.Map.of()).getOrDefault("avatar", ""));
                 p.put("seat", ((Number) col2(r, "seat")).intValue());
                 p.put("netWin", ((Number) col2(r, "net_win")).longValue());
+                p.put("totalBet", ((Number) col2(r, "total_bet")).longValue());
                 p.put("folded", ((Number) col2(r, "folded")).intValue() == 1);
                 p.put("showdown", showdown);
-                // 可见性(对齐老德州回顾):自己的牌总是可见;他人只有摊牌亮过才给
+                // 可见性(对齐扯旋):自己的牌总给;他人只有摊牌亮过才给;付费强制秀牌全给
+                boolean visible = forceShow || uid == viewerUserId || showdown;
                 Object hole = col2(r, "hole_cards");
-                p.put("holeCards", (uid == viewerUserId || showdown) && hole != null ? hole : "");
-                p.put("handName", showdown || uid == viewerUserId ? col2(r, "hand_name") : null);
+                p.put("holeCards", visible && hole != null ? hole : "");
+                p.put("handName", visible ? col2(r, "hand_name") : null);
                 players.add(p);
             }
             out.put("players", players);
