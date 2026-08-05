@@ -65,6 +65,22 @@ public class DzRecordStore {
         }
     }
 
+    /**
+     * 房间历史结算带入总和(对齐扯旋 sumBringInByRoomId:实时战绩"总带入" =
+     * 当前在座实时带入 + 历史周期结算记录带入;跨周期累计,一人循环几个周期都算进去)
+     */
+    public long sumRoomBringIn(long roomId) {
+        if (jdbc == null) return 0;
+        try {
+            Long v = jdbc.queryForObject(
+                    "SELECT COALESCE(SUM(bring_in), 0) FROM dz_settle_record WHERE room_id = ?", Long.class, roomId);
+            return v != null ? v : 0;
+        } catch (Exception e) {
+            log.error("房间历史带入合计失败: roomId={}", roomId, e);
+            return 0;
+        }
+    }
+
     /** 批量取用户简要资料(实时战绩:头像/6位ID;游客/大厅临时机器人查不到则缺省) */
     public java.util.Map<Long, java.util.Map<String, Object>> userBriefs(java.util.Collection<Long> ids) {
         java.util.Map<Long, java.util.Map<String, Object>> out = new java.util.HashMap<>();

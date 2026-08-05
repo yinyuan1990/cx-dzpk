@@ -655,10 +655,13 @@ public class DzGameService {
             Map<String, Object> data = new LinkedHashMap<>();
             data.put("players", players);
             data.put("viewers", viewers);
+            // 总带入(对齐扯旋 roomTotalBringIn):当前在座实时带入 + 历史周期结算记录带入总和
+            //   (循环玩法一人跨多个周期,每个周期的带入都累计;不是只算当前周期)
+            long historyBringIn = records.sumRoomBringIn(roomId);
             data.put("room", Map.of(
                     "roomId", room.getRoomId(), "name", room.getName(),
                     "handNo", room.getHandNo(), "pot", room.displayPot(),
-                    "totalBringIn", totalBringIn, "totalStack", totalStack,
+                    "totalBringIn", totalBringIn + historyBringIn, "totalStack", totalStack,
                     "settleTimeMins", room.getSettleTimeMins(),
                     "createdAtMs", room.getCreatedAtMs()));
             data.put("history", records.roomRecords(roomId, 50));
